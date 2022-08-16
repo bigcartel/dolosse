@@ -2,26 +2,33 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/cespare/xxhash"
 	"github.com/peterbourgon/ff/v3"
-	"gopkg.in/yaml.v3"
+	boom "github.com/tylertreat/BoomFilters"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
+	"sync"
 
 	"github.com/go-mysql-org/go-mysql/canal"
-	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/siddontang/go-log/log"
 )
 
+var ignoredColumnsForDeduplication = map[string]bool{
+	"updated_at": true,
+}
+
+// TODO either move to config or infer from string text if a config is set to true?
+// could this also pick what fields I want to extract?
+// Could this also work with json columns/ruby serialized columns in a generic way?
 var yamlColumns = map[string]map[string]bool{
 	"theme_instances": {
 		"settings":          true,
@@ -32,268 +39,398 @@ var yamlColumns = map[string]map[string]bool{
 	},
 }
 
-var ignoreColumns = map[string]map[string]bool{
-	"theme_instances": {
-		"images_marked_for_destruction": true,
-	},
+// could this be just a giant regexp?
+// ugly but easier to make fast
+// or a per-table regexp?
+// TODO flesh this out
+var anonymizeFields = regexp.MustCompile(".*(address|street|password|salt|email|longitude|latitude).*|payment_methods.properties|products.description")
+
+var clickhouseDb *string
+var clickhouseAddr *string
+var mysqlDb *string
+
+// TODO use this for global cache of clickhouse columns and update before each batch
+type ChColumnSet struct {
+	columns      []ClickhouseQueryColumn
+	columnLookup LookupMap
 }
+
+// TODO if columns are stale and we get an error the processed data for the batch would need to be re-processed or we just restart replication from last gtid set? Maybe that's the move - if it fails due to a schema change just restart from a known good point. Fail early and retry Erlang style.
+var chColumns = NewConcurrentMap[ChColumnSet]()
+
+// The Inverse Bloom Filter may report a false negative but can never report a false positive.
+// behaves a bit like a fixed size hash map that doesn't handle conflicts
+var batchDuplicatesFilter = boom.NewInverseBloomFilter(1000000)
+
+var processRowsChannel = make(chan RowEvent, 10000)
+var batchWriteChannel = make(chan RowInsertData, 10000)
+var latestProcessingGtid = make(chan string)
+var syncCanal *canal.Canal
+var deliveredRows = new(uint64)
+var enqueuedRows = new(uint64)
+var processedRows = new(uint64)
+var skippedRowLevelDuplicates = new(uint64)
+var skippedBatchLevelDuplicates = new(uint64)
+var skippedPersistedDuplicates = new(uint64)
 
 type ProcessRow struct {
 	canal.DummyEventHandler
 }
 
-type RowData map[string]interface{}
-
 type RowEvent struct {
-	e          *canal.RowsEvent
-	gtidSet    mysql.GTIDSet
-	insertData RowInsertData
+	e                 *canal.RowsEvent
+	lastSyncedGtidSet string
 }
 
 type RowInsertData struct {
-	Id             int64     `ch:"id"`
-	EventCreatedAt time.Time `ch:"event_created_at"`
-	Action         string    `ch:"action"`
-	Event          string    `ch:"event"`
+	EventTable     string
+	EventCreatedAt time.Time
+	EventChecksum  uint64
+	Event          RowData
 }
 
-var importChannel chan RowEvent
-var clickhouseConn driver.Conn
-var syncCanal *canal.Canal
-var tables map[string]bool
+type EventsByTable map[string][]RowInsertData
 
-func interfaceToInt64(v interface{}) int64 {
-	switch i := v.(type) {
-	case int64:
-		return i
-	case int32:
-		return int64(i)
-	case uint32:
-		return int64(i)
-	default:
-		return 0
+type LookupMap map[string]bool
+
+type RowData map[string]interface{}
+
+type ClickhouseBatchColumns = []interface{}
+type ClickhouseBatchColumnsByTable = map[string]ClickhouseBatchColumns
+type ClickhouseBatchRow struct {
+	InsertColumns ClickhouseBatchColumns
+	Table         string
+}
+
+func syncChColumns(clickhouseDb ClickhouseDb) {
+	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables(syncCanal)
+
+	for table := range existingClickhouseTables {
+		cols, lookup := clickhouseDb.Columns(table)
+
+		chColumns.set(table, &ChColumnSet{
+			columns:      cols,
+			columnLookup: lookup,
+		})
 	}
 }
 
-func columnInMap(tableName string, columnName string, lookup map[string]map[string]bool) bool {
-	if v, ok := lookup[tableName]; ok {
-		return v[columnName]
-	} else {
-		return false
+func printStats() {
+	log.Infoln(*deliveredRows, "delivered rows")
+	log.Infoln(*enqueuedRows, "enqueued rows")
+	log.Infoln(*processedRows, "processed rows")
+	log.Infoln(*skippedRowLevelDuplicates, "skipped row level duplicate rows")
+	log.Infoln(*skippedBatchLevelDuplicates, "skipped batch level duplicate rows")
+	log.Infoln(*skippedPersistedDuplicates, "skipped persisted duplicate rows")
+}
+
+func incrementStat(counter *uint64) {
+	atomic.AddUint64(counter, 1)
+}
+
+func (r RowInsertData) eventDeduplicationKey() string {
+	return dupIdString(r.Event["id"], r.EventChecksum)
+}
+
+func checkErr(err error) {
+	if err != nil {
+		log.Panicln(err)
 	}
 }
 
-func isYamlColumn(tableName string, columnName string) bool {
-	return columnInMap(tableName, columnName, yamlColumns)
+func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
+	columns := chColumns.get(table)
+	return columns, (columns != nil && len(columns.columns) > 0)
 }
 
-/* FIXME we might go a different approach here and instead
-   infer what to insert based on clickhouse table column names */
-func isIgnoredColumn(tableName string, columnName string) bool {
-	return columnInMap(tableName, columnName, ignoreColumns)
+func processEventWorker(input <-chan RowEvent, output chan<- RowInsertData) {
+	for event := range input {
+		latestProcessingGtid <- event.lastSyncedGtidSet
+		columns, hasColumns := cachedChColumnsForTable(event.e.Table.Name)
+
+		if !hasColumns {
+			incrementStat(processedRows)
+			continue
+		}
+
+		insertData, isDup := eventToClickhouseRowData(event.e, columns.columnLookup)
+
+		if isDup {
+			incrementStat(skippedRowLevelDuplicates)
+		} else if batchDuplicatesFilter.TestAndAdd([]byte(insertData.eventDeduplicationKey())) {
+			incrementStat(skippedBatchLevelDuplicates)
+		} else {
+			output <- insertData
+		}
+
+		incrementStat(processedRows)
+	}
 }
 
-var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
+func startProcessEventsWorkers() {
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go processEventWorker(processRowsChannel, batchWriteChannel)
+	}
+}
 
-func handleValue(value interface{}, tableName string, columnName string) interface{} {
-	switch v := value.(type) {
-	case []uint8:
-		value = string(v)
-	case string:
-		if isYamlColumn(tableName, columnName) {
-			y := make(map[string]interface{})
-			err := yaml.Unmarshal([]byte(v), y)
+// TODO use for yaml too
+func anonymizeValue(table string, columnPath string, value interface{}) interface{} {
+	fieldString := fmt.Sprintf("%s.%s", table, columnPath)
 
-			if err != nil {
-				y["rawYaml"] = v
-				y["errorParsingYaml"] = err
-				log.Errorln(v)
-				log.Errorln(err)
-			}
-
-			for k, v := range y {
-				delete(y, k)
-				y[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = v
-			}
-
-			value = y
+	if anonymizeFields.Match([]byte(fieldString)) {
+		switch v := value.(type) {
+		case string:
+			return fmt.Sprint(xxhash.Sum64String(v))
 		}
 	}
 
 	return value
 }
 
-func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
-	gtidSet := syncCanal.SyncedGTIDSet()
-	Data := make(RowData, len(e.Rows[0]))
-	var id int64
-	row := e.Rows[0]
+func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowInsertData, bool) {
+	var previousRow []interface{}
+	tableName := e.Table.Name
+	hasPreviousEvent := len(e.Rows) == 2
+
+	newEventIdx := len(e.Rows) - 1
+	Data := make(RowData, len(e.Rows[newEventIdx]))
+	if hasPreviousEvent {
+		previousRow = e.Rows[0]
+	}
+	row := e.Rows[newEventIdx]
+
+	isDuplicate := true
 
 	for i, c := range e.Table.Columns {
-		if !isIgnoredColumn(e.Table.Name, c.Name) {
-			if c.Name == "id" {
-				id = interfaceToInt64(row[i])
+		columnName := c.Name
+		if columnLookup[columnName] {
+			convertedValue := convertMysqlValue(&c, parseValue(row[i], tableName, columnName))
+			Data[c.Name] = anonymizeValue(tableName, columnName, convertedValue)
+			if isDuplicate &&
+				hasPreviousEvent &&
+				!ignoredColumnsForDeduplication[columnName] &&
+				(convertedValue != convertMysqlValue(&c, parseValue(previousRow[i], tableName, columnName))) {
+				isDuplicate = false
 			}
-
-			Data[c.Name] = handleValue(row[i], e.Table.Name, c.Name)
 		}
 	}
 
-	// TODO use the row's updated_at instead of this if present
+	if isDuplicate {
+		return RowInsertData{}, true
+	}
+
 	timestamp := time.Now()
 
 	if e.Header != nil {
 		timestamp = time.Unix(int64(e.Header.Timestamp), 0)
+	} else {
+		log.Infoln("Event header is nil, using now as event created at")
 	}
 
-	updated_at := Data["updated_at"]
+	Data[eventCreatedAtColumnName] = timestamp
 
-	if v, ok := updated_at.(time.Time); ok && v.Before(timestamp) {
-		log.Infoln("using updated at")
-		timestamp = v
-	}
+	checksum := checksumMapValues(Data)
 
-	j, err := json.Marshal(Data)
+	Data[actionColumnName] = e.Action
+	Data[checksumColumnName] = checksum
 
-	if err != nil {
-		log.Fatal(err)
-	}
+	return RowInsertData{
+		EventTable:     tableName,
+		EventCreatedAt: timestamp,
+		EventChecksum:  checksum,
+		Event:          Data,
+	}, false
+}
 
-	importChannel <- RowEvent{
-		e:       e,
-		gtidSet: gtidSet,
-		insertData: RowInsertData{
-			Id:             id,
-			EventCreatedAt: timestamp,
-			Action:         e.Action,
-			Event:          string(j),
-		},
+func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
+	_, hasColumns := cachedChColumnsForTable(e.Table.Name)
+
+	if hasColumns {
+		processRowsChannel <- RowEvent{
+			e:                 e,
+			lastSyncedGtidSet: syncCanal.SyncedGTIDSet().String(),
+		}
+
+		incrementStat(enqueuedRows)
 	}
 
 	return nil
 }
 
-func createLogTable(table string) {
-	// TODO experiment with using create table from select empty using a mysql table function
-	if !tables[table] {
-		err := clickhouseConn.Exec(context.Background(), fmt.Sprintf(`
-			create table if not exists mysql_bigcartel_binlog.%s (
-				id             	 Int64 codec(DoubleDelta, ZSTD),
-				event_created_at DateTime codec(DoubleDelta, ZSTD),
-				action           LowCardinality(String),
-				event            JSON CODEC(ZSTD)
-			) Engine = MergeTree()
-			ORDER BY (event_created_at)
-		`, table))
+func tableWithDb(table string) string {
+	return fmt.Sprintf("%s.%s", *clickhouseDb, table)
+}
 
-		if err != nil {
-			log.Fatal(err)
+func dupIdString(id interface{}, checksum interface{}) string {
+	return fmt.Sprintf("id: %d %s: %v", id, checksumColumnName, checksum)
+}
+
+func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
+	syncChColumns(clickhouseDb)
+
+	var wg sync.WaitGroup
+
+	for table, rows := range eventsByTable {
+		_, hasColumns := cachedChColumnsForTable(table)
+		if !hasColumns {
+			continue
 		}
 
-		tables[table] = true
+		wg.Add(1)
+
+		go func(table string, rows []RowInsertData) {
+			deliverBatchForTable(clickhouseDb, table, rows)
+			wg.Done()
+		}(table, rows)
+	}
+
+	wg.Wait()
+
+	if lastGtidSet != "" {
+		clickhouseDb.SetGTIDString(lastGtidSet)
 	}
 }
 
-type Duplicate struct {
-	Id             int64     `ch:"id"`
-	EventCreatedAt time.Time `ch:"event_created_at"`
+func logNoRows(table string) {
+	log.Infoln("no rows to send for", table, "skipping...")
+}
+
+func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows []RowInsertData) {
+	columns := chColumns.get(table)
+	if columns == nil {
+		log.Infoln("No columns in clickhouse found for", table)
+		return
+	}
+
+	if len(rows) == 0 {
+		logNoRows(table)
+		return
+	}
+
+	tableWithDb := tableWithDb(table)
+
+	batchColumnArrays, writeCount := buildClickhouseBatchRows(clickhouseDb, tableWithDb, rows, columns.columns)
+
+	if writeCount == 0 {
+		logNoRows(table)
+		return
+	}
+
+	log.Infof("sending batch of %d records for %s", writeCount, table)
+
+	sendClickhouseBatch(clickhouseDb, tableWithDb, batchColumnArrays, columns.columns)
+
+	atomic.AddUint64(deliveredRows, uint64(writeCount))
+
+	log.Infoln("batch sent for", tableWithDb)
+}
+
+func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows []RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+
+	minCreatedAt, maxCreatedAt := getMinMaxCreatedAt(processedRows)
+	hasDuplicates, duplicatesMap := clickhouseDb.QueryDuplicates(tableWithDb,
+		minCreatedAt,
+		maxCreatedAt)
+
+	batchColumnArrays := make(ClickhouseBatchColumns, len(chColumns))
+	writeCount := 0
+
+	for _, rowInsertData := range processedRows {
+		dedupeKey := rowInsertData.eventDeduplicationKey()
+
+		if hasDuplicates && duplicatesMap[dedupeKey] {
+			incrementStat(skippedPersistedDuplicates)
+			continue
+		}
+
+		if rowInsertData.EventCreatedAt.Year() == 1 {
+			log.Panicln(rowInsertData)
+		}
+
+		writeCount++
+
+		for i, col := range chColumns {
+			val := rowInsertData.Event[col.Name]
+			newColumnAry, err := reflectAppend(col.Type, batchColumnArrays[i], val)
+
+			if err != nil {
+				log.Infoln(err)
+				log.Infoln("Column:", col.Name)
+				log.Fatalf("Insert Data: %+v\n", rowInsertData)
+			}
+
+			batchColumnArrays[i] = newColumnAry
+		}
+	}
+
+	return batchColumnArrays, writeCount
+}
+
+func commaSeparatedColumnNames(columns []ClickhouseQueryColumn) string {
+	columnNames := ""
+	count := 0
+	columnCount := len(columns)
+	for _, c := range columns {
+		count++
+		columnNames += c.Name
+		if count != columnCount {
+			columnNames += ","
+		}
+	}
+
+	return columnNames
+}
+
+func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchColumnArrays ClickhouseBatchColumns, chColumns []ClickhouseQueryColumn) {
+	batch, err := clickhouseDb.conn.PrepareBatch(context.Background(),
+		fmt.Sprintf("INSERT INTO %s (%s)", tableWithDb, commaSeparatedColumnNames(chColumns)))
+
+	checkErr(err)
+
+	for i, col := range batchColumnArrays {
+		err := batch.Column(i).Append(col)
+		if err != nil {
+			log.Panicln(err, tableWithDb, col)
+		}
+	}
+
+	checkErr(batch.Send())
+}
+
+func getMinMaxCreatedAt(rows []RowInsertData) (time.Time, time.Time) {
+	minCreatedAt := time.Time{}
+	maxCreatedAt := time.Time{}
+
+	for _, r := range rows {
+		comparingCreatedAt := r.EventCreatedAt
+
+		if minCreatedAt.Year() == 1 {
+			minCreatedAt = comparingCreatedAt
+		} else if minCreatedAt.After(comparingCreatedAt) {
+			minCreatedAt = comparingCreatedAt
+		}
+
+		if maxCreatedAt.Before(comparingCreatedAt) {
+			maxCreatedAt = comparingCreatedAt
+		}
+	}
+
+	return minCreatedAt, maxCreatedAt
 }
 
 func batchWrite() {
-	timer := time.NewTimer(10 * time.Second)
-	eventsByTable := make(map[string][]RowInsertData)
-	tables = make(map[string]bool)
-	var lastGtidSet mysql.GTIDSet
+	clickhouseDb := establishClickhouseConnection()
 
+	timer := time.NewTimer(10 * time.Second)
+	eventsByTable := make(EventsByTable)
+	var lastGtidSet string
 	counter := 0
 
 	deliver := func() {
+		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
+		printStats()
 		timer = time.NewTimer(10 * time.Second)
-
-		// TODO add position saving to clickhouse based on last row written and recovery on restart
-
-		for table, rows := range eventsByTable {
-			createLogTable(table)
-
-			ctx := context.Background()
-
-			tableWithDb := fmt.Sprintf("mysql_bigcartel_binlog.%s", table)
-
-			var duplicates []Duplicate
-
-			err := clickhouseConn.Select(ctx,
-				&duplicates,
-				fmt.Sprintf("SELECT id, event_created_at FROM %s where event_created_at >= $1 and event_created_at <= $2", tableWithDb),
-				rows[0].EventCreatedAt, rows[len(rows)-1].EventCreatedAt,
-			)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			var duplicatesMap = make(map[Duplicate]bool)
-
-			for _, dup := range duplicates {
-				duplicatesMap[dup] = true
-			}
-
-			batch, err := clickhouseConn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s", tableWithDb))
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			duplicateCheck := Duplicate{}
-			hasDuplicates := len(duplicates) > 0
-
-			for _, row := range rows {
-				if hasDuplicates {
-					duplicateCheck.Id = row.Id
-					duplicateCheck.EventCreatedAt = row.EventCreatedAt
-
-					if duplicatesMap[duplicateCheck] {
-						log.Infoln("is dupe ", duplicateCheck)
-						continue
-					}
-				}
-
-				err = batch.AppendStruct(&row)
-
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				err = batch.Flush()
-
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-
-			log.Infoln("sending batch for ", table)
-
-			err = batch.Send()
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			// because I write batches by table it's not 1 to 1 writing in the same order as the binlog
-			//
-			// TODO save gtidset in clickhouse and recover on startup. Test this to make sure it's working correctly.
-
-			log.Infoln("batch sent for ", table)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		if lastGtidSet != nil {
-			setGTIDString(lastGtidSet.String())
-		}
-
-		eventsByTable = make(map[string][]RowInsertData)
+		eventsByTable = make(EventsByTable)
 		counter = 0
 	}
 
@@ -301,11 +438,12 @@ func batchWrite() {
 		select {
 		case <-timer.C:
 			deliver()
-		case e := <-importChannel:
-			eventsByTable[e.e.Table.Name] = append(eventsByTable[e.e.Table.Name], e.insertData)
-			lastGtidSet = e.gtidSet
+		case gtid := <-latestProcessingGtid:
+			lastGtidSet = gtid
+		case e := <-batchWriteChannel:
+			eventsByTable[e.EventTable] = append(eventsByTable[e.EventTable], e)
 
-			if counter == 10000 {
+			if counter == 100000 {
 				deliver()
 			} else {
 				counter++
@@ -314,80 +452,22 @@ func batchWrite() {
 	}
 }
 
-var gtidSetKey string = "last_synced_gtid_set"
-
-func getGTIDSet() mysql.GTIDSet {
-	type storedGtidSet struct {
-		Value string `ch:"value"`
-	}
-
-	var rows []storedGtidSet
-
-	err := clickhouseConn.Select(context.Background(),
-		&rows,
-		"select value from mysql_bigcartel_binlog.binlog_sync_state where key = $1",
-		gtidSetKey)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	gtidString := ""
-	if len(rows) > 0 {
-		gtidString = rows[0].Value
-	}
-
-	log.Infoln("read gtid set", gtidString)
-	set, err := mysql.ParseMysqlGTIDSet(gtidString)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return set
-}
-
-func setGTIDString(s string) {
-	err := clickhouseConn.Exec(context.Background(),
-		"insert into mysql_bigcartel_binlog.binlog_sync_state (key, value) values ($1, $2)",
-		gtidSetKey,
-		s)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Infoln("persisted gtid set", s)
-}
-
-func setupClickhouseDb() {
-	ctx := context.Background()
-	err := clickhouseConn.Exec(ctx, "create database if not exists mysql_bigcartel_binlog")
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = clickhouseConn.Exec(ctx, `
-		create table if not exists mysql_bigcartel_binlog.binlog_sync_state (
-			key String,
-			value String
-	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-}
-
 func main() {
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
+
 	var (
-		mysqlAddr      = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
-		mysqlUser      = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
-		mysqlPassword  = fs.String("mysql-password", "password", "mysql password (also via MYSQL_PASSWORD)")
-		clickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
-		_              = fs.String("config", "", "config file (optional)")
+		mysqlAddr     = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
+		mysqlUser     = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
+		mysqlPassword = fs.String("mysql-password", "password", "mysql password (also via MYSQL_PASSWORD)")
+		forceDump     = fs.Bool("force-dump", false, "Force full data dump and reset stored binlog position")
+		startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
+		_             = fs.String("config", "", "config file (optional)")
 	)
+
+	mysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
+	clickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
+	clickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to (also available via CLICKHOUSE_DB)")
+	// TODO make batch count and delivery timeout configurable
 
 	err := ff.Parse(fs, os.Args[1:],
 		ff.WithConfigFileFlag("config"),
@@ -402,44 +482,55 @@ func main() {
 	cfg.Addr = *mysqlAddr
 	cfg.User = *mysqlUser
 	cfg.Password = *mysqlPassword
-	cfg.Dump.TableDB = "bigcartel"
+	cfg.Dump.TableDB = *mysqlDb
 	cfg.Dump.Tables = []string{"plans"}
-	cfg.IncludeTableRegex = []string{"products"}
-
-	importChannel = make(chan RowEvent, 20000)
-
-	clickhouseConn, err = clickhouse.Open(&clickhouse.Options{
-		Addr: []string{*clickhouseAddr},
-		Settings: clickhouse.Settings{
-			"max_execution_time":             60,
-			"allow_experimental_object_type": 1,
-		},
-		Compression: &clickhouse.Compression{clickhouse.CompressionLZ4, 1},
-	})
+	log.Infoln(fmt.Sprintf("%s.*", *mysqlDb))
+	cfg.IncludeTableRegex = []string{fmt.Sprintf("%s..*", *mysqlDb)}
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	setupClickhouseDb()
+	clickhouseDb := establishClickhouseConnection()
+	clickhouseDb.Setup()
+	// TODO validate all clickhouse table columns are compatible with mysql table columns
+	// and that clickhouse tables have event_created_at DateTime, id same_as_mysql, action string
+	// use the clickhouse mysql table function with the credentials provided to this command
+	// to do it using clickhouse translated types for max compat
 
 	syncCanal, err = canal.NewCanal(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Register a handler to handle RowsEvent
+	clickhouseDb.CheckSchema(syncCanal)
+
 	syncCanal.SetEventHandler(&ProcessRow{})
 
+	syncChColumns(clickhouseDb)
+
+	startProcessEventsWorkers()
 	go batchWrite()
 
-	ch := make(chan os.Signal)
+	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
+		close(processRowsChannel)
+		close(batchWriteChannel)
+		close(latestProcessingGtid)
 		log.Infoln(syncCanal.SyncedGTIDSet())
 		os.Exit(1)
 	}()
 
-	syncCanal.StartFromGTID(getGTIDSet())
+	if *forceDump {
+		clickhouseDb.SetGTIDString("")
+		checkErr(syncCanal.Run())
+	} else {
+		if *startFromGtid != "" {
+			clickhouseDb.SetGTIDString(*startFromGtid)
+		}
+
+		checkErr(syncCanal.StartFromGTID(clickhouseDb.GetGTIDSet()))
+	}
 }
