@@ -1,24 +1,23 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/peterbourgon/ff/v3"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
-
 	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/natefinch/atomic"
 	"github.com/siddontang/go-log/log"
 )
 
@@ -44,23 +43,15 @@ type ProcessRow struct {
 
 type RowData map[string]interface{}
 
-type RowEvent struct {
-	e          *canal.RowsEvent
-	gtidSet    mysql.GTIDSet
-	insertData RowInsertData
-}
-
 type RowInsertData struct {
-	Id             int64     `ch:"id"`
-	EventCreatedAt time.Time `ch:"event_created_at"`
-	Action         string    `ch:"action"`
-	Event          string    `ch:"event"`
+	Id             int64     `json:"id"`
+	Table          string    `json:"table"`
+	EventCreatedAt time.Time `json:"event_created_at"`
+	Action         string    `json:"action"`
+	Event          RowData   `json:"event"`
 }
 
-var importChannel chan RowEvent
-var clickhouseConn driver.Conn
 var syncCanal *canal.Canal
-var tables map[string]bool
 
 func interfaceToInt64(v interface{}) int64 {
 	switch i := v.(type) {
@@ -153,192 +144,53 @@ func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
 		timestamp = v
 	}
 
-	j, err := json.Marshal(Data)
+	insertData := RowInsertData{
+		Id:             id,
+		EventCreatedAt: timestamp,
+		Table:          e.Table.Name,
+		Action:         e.Action,
+		Event:          Data,
+	}
+
+	j, err := json.Marshal(insertData)
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	importChannel <- RowEvent{
-		e:       e,
-		gtidSet: gtidSet,
-		insertData: RowInsertData{
-			Id:             id,
-			EventCreatedAt: timestamp,
-			Action:         e.Action,
-			Event:          string(j),
-		},
-	}
+	fmt.Println(string(j))
+
+	setGTIDString(gtidSet.String())
 
 	return nil
 }
 
-func createLogTable(table string) {
-	// TODO experiment with using create table from select empty using a mysql table function
-	if !tables[table] {
-		err := clickhouseConn.Exec(context.Background(), fmt.Sprintf(`
-			create table if not exists mysql_bigcartel_binlog.%s (
-				id             	 Int64 codec(DoubleDelta, ZSTD),
-				event_created_at DateTime codec(DoubleDelta, ZSTD),
-				action           LowCardinality(String),
-				event            JSON CODEC(ZSTD)
-			) Engine = MergeTree()
-			ORDER BY (event_created_at)
-		`, table))
+var gtidSetKey string = "./last_synced_gtid_set"
+
+func getGTIDSet() mysql.GTIDSet {
+	file, err := os.OpenFile(gtidSetKey, os.O_RDWR, 0644)
+	gtidString := make([]byte, 0)
+
+	if errors.Is(err, os.ErrNotExist) {
+		file, err := os.Create(gtidSetKey)
 
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		tables[table] = true
-	}
-}
-
-type Duplicate struct {
-	Id             int64     `ch:"id"`
-	EventCreatedAt time.Time `ch:"event_created_at"`
-}
-
-func batchWrite() {
-	timer := time.NewTimer(10 * time.Second)
-	eventsByTable := make(map[string][]RowInsertData)
-	tables = make(map[string]bool)
-	var lastGtidSet mysql.GTIDSet
-
-	counter := 0
-
-	deliver := func() {
-		timer = time.NewTimer(10 * time.Second)
-
-		// TODO add position saving to clickhouse based on last row written and recovery on restart
-
-		for table, rows := range eventsByTable {
-			createLogTable(table)
-
-			ctx := context.Background()
-
-			tableWithDb := fmt.Sprintf("mysql_bigcartel_binlog.%s", table)
-
-			var duplicates []Duplicate
-
-			err := clickhouseConn.Select(ctx,
-				&duplicates,
-				fmt.Sprintf("SELECT id, event_created_at FROM %s where event_created_at >= $1 and event_created_at <= $2", tableWithDb),
-				rows[0].EventCreatedAt, rows[len(rows)-1].EventCreatedAt,
-			)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			var duplicatesMap = make(map[Duplicate]bool)
-
-			for _, dup := range duplicates {
-				duplicatesMap[dup] = true
-			}
-
-			batch, err := clickhouseConn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s", tableWithDb))
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			duplicateCheck := Duplicate{}
-			hasDuplicates := len(duplicates) > 0
-
-			for _, row := range rows {
-				if hasDuplicates {
-					duplicateCheck.Id = row.Id
-					duplicateCheck.EventCreatedAt = row.EventCreatedAt
-
-					if duplicatesMap[duplicateCheck] {
-						log.Infoln("is dupe ", duplicateCheck)
-						continue
-					}
-				}
-
-				err = batch.AppendStruct(&row)
-
-				if err != nil {
-					log.Fatal(err)
-				}
-
-				err = batch.Flush()
-
-				if err != nil {
-					log.Fatal(err)
-				}
-			}
-
-			log.Infoln("sending batch for ", table)
-
-			err = batch.Send()
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			// because I write batches by table it's not 1 to 1 writing in the same order as the binlog
-			//
-			// TODO save gtidset in clickhouse and recover on startup. Test this to make sure it's working correctly.
-
-			log.Infoln("batch sent for ", table)
-
-			if err != nil {
-				log.Fatal(err)
-			}
-		}
-
-		if lastGtidSet != nil {
-			setGTIDString(lastGtidSet.String())
-		}
-
-		eventsByTable = make(map[string][]RowInsertData)
-		counter = 0
-	}
-
-	for {
-		select {
-		case <-timer.C:
-			deliver()
-		case e := <-importChannel:
-			eventsByTable[e.e.Table.Name] = append(eventsByTable[e.e.Table.Name], e.insertData)
-			lastGtidSet = e.gtidSet
-
-			if counter == 10000 {
-				deliver()
-			} else {
-				counter++
-			}
-		}
-	}
-}
-
-var gtidSetKey string = "last_synced_gtid_set"
-
-func getGTIDSet() mysql.GTIDSet {
-	type storedGtidSet struct {
-		Value string `ch:"value"`
-	}
-
-	var rows []storedGtidSet
-
-	err := clickhouseConn.Select(context.Background(),
-		&rows,
-		"select value from mysql_bigcartel_binlog.binlog_sync_state where key = $1",
-		gtidSetKey)
-
-	if err != nil {
+		file.Close()
+	} else if err != nil {
 		log.Fatal(err)
+	} else {
+		_, err := file.Read(gtidString)
+
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
-	gtidString := ""
-	if len(rows) > 0 {
-		gtidString = rows[0].Value
-	}
-
-	log.Infoln("read gtid set", gtidString)
-	set, err := mysql.ParseMysqlGTIDSet(gtidString)
+	log.Infoln("read gtid set", string(gtidString))
+	set, err := mysql.ParseMysqlGTIDSet(string(gtidString))
 
 	if err != nil {
 		log.Fatal(err)
@@ -348,31 +200,7 @@ func getGTIDSet() mysql.GTIDSet {
 }
 
 func setGTIDString(s string) {
-	err := clickhouseConn.Exec(context.Background(),
-		"insert into mysql_bigcartel_binlog.binlog_sync_state (key, value) values ($1, $2)",
-		gtidSetKey,
-		s)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	log.Infoln("persisted gtid set", s)
-}
-
-func setupClickhouseDb() {
-	ctx := context.Background()
-	err := clickhouseConn.Exec(ctx, "create database if not exists mysql_bigcartel_binlog")
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = clickhouseConn.Exec(ctx, `
-		create table if not exists mysql_bigcartel_binlog.binlog_sync_state (
-			key String,
-			value String
-	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`)
+	err := atomic.WriteFile(gtidSetKey, strings.NewReader(s))
 
 	if err != nil {
 		log.Fatal(err)
@@ -380,16 +208,23 @@ func setupClickhouseDb() {
 }
 
 func main() {
+	rotatingLog, err := log.NewTimeRotatingFileHandler("log/mysql_binlog_sync.log", 3, 0)
+	if err != nil {
+		panic(err)
+	}
+
+	logger := log.NewDefault(rotatingLog)
+	log.SetDefaultLogger(logger)
+
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
 	var (
-		mysqlAddr      = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
-		mysqlUser      = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
-		mysqlPassword  = fs.String("mysql-password", "password", "mysql password (also via MYSQL_PASSWORD)")
-		clickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
-		_              = fs.String("config", "", "config file (optional)")
+		mysqlAddr     = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
+		mysqlUser     = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
+		mysqlPassword = fs.String("mysql-password", "password", "mysql password (also via MYSQL_PASSWORD)")
+		_             = fs.String("config", "", "config file (optional)")
 	)
 
-	err := ff.Parse(fs, os.Args[1:],
+	err = ff.Parse(fs, os.Args[1:],
 		ff.WithConfigFileFlag("config"),
 		ff.WithConfigFileParser(ff.PlainParser),
 	)
@@ -405,23 +240,7 @@ func main() {
 	cfg.Dump.TableDB = "bigcartel"
 	cfg.Dump.Tables = []string{"plans"}
 	cfg.IncludeTableRegex = []string{"products"}
-
-	importChannel = make(chan RowEvent, 20000)
-
-	clickhouseConn, err = clickhouse.Open(&clickhouse.Options{
-		Addr: []string{*clickhouseAddr},
-		Settings: clickhouse.Settings{
-			"max_execution_time":             60,
-			"allow_experimental_object_type": 1,
-		},
-		Compression: &clickhouse.Compression{clickhouse.CompressionLZ4, 1},
-	})
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	setupClickhouseDb()
+	cfg.Logger = logger
 
 	syncCanal, err = canal.NewCanal(cfg)
 	if err != nil {
@@ -430,8 +249,6 @@ func main() {
 
 	// Register a handler to handle RowsEvent
 	syncCanal.SetEventHandler(&ProcessRow{})
-
-	go batchWrite()
 
 	ch := make(chan os.Signal)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)

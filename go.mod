@@ -1,4 +1,4 @@
-module bigcartel/go-mysql-clickhouse
+module bigcartel/mysql-binlog-follower
 
 go 1.18
 
@@ -16,6 +16,7 @@ require (
 	github.com/go-faster/errors v0.6.1 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
+	github.com/natefinch/atomic v1.0.1 // indirect
 	github.com/paulmach/orb v0.7.1 // indirect
 	github.com/peterbourgon/ff/v3 v3.3.0 // indirect
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect

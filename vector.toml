@@ -1,0 +1,43 @@
+[sources.in]
+type = "exec"
+mode = "streaming"
+decoding.codec = "json"
+command = ["./mysql-binlog-follower", "--mysql-password", "${MYSQL_PASSWORD}"]
+
+# [sources.in]
+# type = "file"
+# data_dir = "./"
+# include = [ "./logs" ]
+# read_from = "beginning"
+
+[transforms.all]
+type = "remap"
+inputs = ["in"]
+source = """
+.e = parse_json!(string!(.message))
+. = {
+	"id": .e.id,
+	"event_created_at_raw": .e.event_created_at,
+	"table": .e.table,
+	"event": encode_json(.e.event)
+}
+"""
+
+[transforms.products]
+inputs = ["all"]
+type = "filter"
+condition = '.table == "products"'
+
+[sinks.out]
+inputs = ["products"]
+type = "console"
+encoding.codec = "json"
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["all"]
+database = "vector_test"
+endpoint = "http://10.100.0.56:8123"
+table = "all_events"
+compression = "gzip"
+skip_unknown_fields = true
