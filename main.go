@@ -6,13 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"regexp"
 	"runtime"
 	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/cespare/xxhash"
 	"github.com/peterbourgon/ff/v3"
 	boom "github.com/tylertreat/BoomFilters"
 
@@ -25,25 +23,6 @@ import (
 var ignoredColumnsForDeduplication = map[string]bool{
 	"updated_at": true,
 }
-
-// TODO either move to config or infer from string text if a config is set to true?
-// could this also pick what fields I want to extract?
-// Could this also work with json columns/ruby serialized columns in a generic way?
-var yamlColumns = map[string]map[string]bool{
-	"theme_instances": {
-		"settings":          true,
-		"images_sort_order": true,
-	},
-	"order_transactions": {
-		"params": true,
-	},
-}
-
-// could this be just a giant regexp?
-// ugly but easier to make fast
-// or a per-table regexp?
-// TODO flesh this out
-var anonymizeFields = regexp.MustCompile(".*(address|street|password|salt|email|longitude|latitude).*|payment_methods.properties|products.description")
 
 var clickhouseDb *string
 var clickhouseAddr *string
@@ -173,20 +152,6 @@ func startProcessEventsWorkers() {
 	}
 }
 
-// TODO use for yaml too
-func anonymizeValue(table string, columnPath string, value interface{}) interface{} {
-	fieldString := fmt.Sprintf("%s.%s", table, columnPath)
-
-	if anonymizeFields.Match([]byte(fieldString)) {
-		switch v := value.(type) {
-		case string:
-			return fmt.Sprint(xxhash.Sum64String(v))
-		}
-	}
-
-	return value
-}
-
 func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowInsertData, bool) {
 	var previousRow []interface{}
 	tableName := e.Table.Name
@@ -205,7 +170,7 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowIn
 		columnName := c.Name
 		if columnLookup[columnName] {
 			convertedValue := convertMysqlValue(&c, parseValue(row[i], tableName, columnName))
-			Data[c.Name] = anonymizeValue(tableName, columnName, convertedValue)
+			Data[c.Name] = convertedValue
 			if isDuplicate &&
 				hasPreviousEvent &&
 				!ignoredColumnsForDeduplication[columnName] &&
