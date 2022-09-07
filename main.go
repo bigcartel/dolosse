@@ -61,15 +61,6 @@ type RowEvent struct {
 	lastSyncedGtidSet string
 }
 
-type RowInsertData struct {
-	EventTable     string
-	EventCreatedAt time.Time
-	EventChecksum  uint64
-	Event          RowData
-}
-
-type EventsByTable map[string][]RowInsertData
-
 type LookupMap map[string]bool
 
 type RowData map[string]interface{}
@@ -79,6 +70,19 @@ type ClickhouseBatchColumnsByTable = map[string]ClickhouseBatchColumns
 type ClickhouseBatchRow struct {
 	InsertColumns ClickhouseBatchColumns
 	Table         string
+}
+
+type RowInsertData struct {
+	EventTable     string
+	EventCreatedAt time.Time
+	EventChecksum  uint64
+	Event          RowData
+}
+
+type EventsByTable map[string][]RowInsertData
+
+func (r RowInsertData) eventDeduplicationKey() string {
+	return dupIdString(r.Event["id"], r.EventChecksum)
 }
 
 func syncChColumns(clickhouseDb ClickhouseDb) {
@@ -105,10 +109,6 @@ func printStats() {
 
 func incrementStat(counter *uint64) {
 	atomic.AddUint64(counter, 1)
-}
-
-func (r RowInsertData) eventDeduplicationKey() string {
-	return dupIdString(r.Event["id"], r.EventChecksum)
 }
 
 func checkErr(err error) {
