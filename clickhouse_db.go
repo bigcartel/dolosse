@@ -95,7 +95,7 @@ func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end 
 						changelog_action
 					) apply x -> ifNull(toString(x), ''))
 				)
-			)
+			, ',')
 		) as checksum
 		FROM %s where %s >= $1 and %s <= $2`,
 		tableWithDb,

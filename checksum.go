@@ -27,6 +27,6 @@ func checksumMapValues(m map[string]interface{}) uint64 {
 	}
 
 	sort.Strings(values)
-	concatenated := []byte(strings.Join(values, ""))
+	concatenated := []byte(strings.Join(values, ","))
 	return city.CH64(concatenated)
 }
