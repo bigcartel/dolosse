@@ -90,10 +90,7 @@ func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end 
 		cityHash64(
 			arrayStringConcat(
 				arraySort(
-					array(* except(
-						changelog_event_checksum,
-						changelog_action
-					) apply x -> ifNull(toString(x), ''))
+					array(* except(changelog_action) apply x -> ifNull(toString(x), ''))
 				)
 			, ',')
 		) as checksum
