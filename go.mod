@@ -9,7 +9,6 @@ require (
 	github.com/peterbourgon/ff/v3 v3.3.0
 	github.com/shopspring/decimal v1.3.1
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07
-	github.com/spf13/cast v1.5.0
 	github.com/tylertreat/BoomFilters v0.0.0-20210315201527-1a82519a3e43
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -22,6 +21,7 @@ require (
 	github.com/go-faster/errors v0.6.1 // indirect
 	github.com/google/uuid v1.3.0 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
+	github.com/kr/pretty v0.3.0 // indirect
 	github.com/paulmach/orb v0.7.1 // indirect
 	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3 // indirect
