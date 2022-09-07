@@ -452,6 +452,7 @@ func main() {
 	cfg.IncludeTableRegex = []string{fmt.Sprintf("%s..*", *mysqlDb)}
 	cfg.UseDecimal = true
 	cfg.ParseTime = true
+	cfg.TimestampStringLocation = time.UTC
 
 	if err != nil {
 		log.Fatal(err)
