@@ -169,12 +169,12 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowIn
 	for i, c := range e.Table.Columns {
 		columnName := c.Name
 		if columnLookup[columnName] {
-			convertedValue := convertMysqlValue(&c, parseValue(row[i], tableName, columnName))
+			convertedValue := parseValue(row[i], tableName, columnName)
 			Data[c.Name] = convertedValue
 			if isDuplicate &&
 				hasPreviousEvent &&
 				!ignoredColumnsForDeduplication[columnName] &&
-				(convertedValue != convertMysqlValue(&c, parseValue(previousRow[i], tableName, columnName))) {
+				(convertedValue != parseValue(previousRow[i], tableName, columnName)) {
 				isDuplicate = false
 			}
 		}
@@ -450,6 +450,8 @@ func main() {
 	cfg.Dump.Tables = []string{"plans"}
 	log.Infoln(fmt.Sprintf("%s.*", *mysqlDb))
 	cfg.IncludeTableRegex = []string{fmt.Sprintf("%s..*", *mysqlDb)}
+	cfg.UseDecimal = true
+	cfg.ParseTime = true
 
 	if err != nil {
 		log.Fatal(err)
