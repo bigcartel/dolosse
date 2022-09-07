@@ -152,6 +152,8 @@ func startProcessEventsWorkers() {
 	}
 }
 
+// TODO test with all types we care about - yaml conversion, etc.
+// dedupe for yaml columns
 func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowInsertData, bool) {
 	var previousRow []interface{}
 	tableName := e.Table.Name
@@ -169,14 +171,15 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowIn
 	for i, c := range e.Table.Columns {
 		columnName := c.Name
 		if columnLookup[columnName] {
-			convertedValue := parseValue(row[i], tableName, columnName)
-			Data[c.Name] = convertedValue
 			if isDuplicate &&
 				hasPreviousEvent &&
 				!ignoredColumnsForDeduplication[columnName] &&
-				(convertedValue != parseValue(previousRow[i], tableName, columnName)) {
+				(fmt.Sprint(row[i]) != fmt.Sprint(previousRow[i])) {
 				isDuplicate = false
 			}
+
+			convertedValue := parseValue(row[i], tableName, columnName)
+			Data[c.Name] = convertedValue
 		}
 	}
 
