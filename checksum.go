@@ -4,12 +4,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-faster/city"
 )
-
-// TODO also use xxhash to redact sensitive fields - auto detect certain field names
-// and also allow config of sensitive field names
 
 func checksumMapValues(m map[string]interface{}, ignoredColumns ...string) uint64 {
 	lookup := make(map[string]bool, len(ignoredColumns))
@@ -21,12 +19,18 @@ func checksumMapValues(m map[string]interface{}, ignoredColumns ...string) uint6
 
 	values := make([]string, len(m)-len(ignoredColumns))
 	for k, v := range m {
-		if !lookup[k] {
-			values[i] = fmt.Sprintf("%v", v)
+		if !lookup[k] && v != nil {
+			switch c := v.(type) {
+			case time.Time:
+				values[i] = c.UTC().Format("2006-01-02 15:04:05")
+			default:
+				values[i] = fmt.Sprintf("%v", v)
+			}
 			i++
 		}
 	}
 
 	sort.Strings(values)
-	return city.CH64([]byte(strings.Join(values, "")))
+	concatenated := []byte(strings.Join(values, ""))
+	return city.CH64(concatenated)
 }

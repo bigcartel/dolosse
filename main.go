@@ -197,7 +197,6 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowIn
 	checksum := checksumMapValues(Data)
 
 	Data[actionColumnName] = e.Action
-	Data[checksumColumnName] = checksum
 
 	return RowInsertData{
 		EventTable:     tableName,
@@ -227,7 +226,7 @@ func tableWithDb(table string) string {
 }
 
 func dupIdString(id interface{}, checksum interface{}) string {
-	return fmt.Sprintf("id: %d %s: %v", id, checksumColumnName, checksum)
+	return fmt.Sprintf("%d %v", id, checksum)
 }
 
 func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {

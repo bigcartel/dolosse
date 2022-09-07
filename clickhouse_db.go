@@ -18,7 +18,6 @@ type ClickhouseDb struct {
 	conn driver.Conn
 }
 
-const checksumColumnName = "changelog_event_checksum"
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const actionColumnName = "changelog_action"
 
@@ -86,8 +85,19 @@ func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 }
 
 func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
-	queryString := fmt.Sprintf("SELECT id, %s FROM %s where %s >= $1 and %s <= $2",
-		checksumColumnName,
+	queryString := fmt.Sprintf(`SELECT
+		id,
+		cityHash64(
+			arrayStringConcat(
+				arraySort(
+					array(* except(
+						changelog_event_checksum,
+						changelog_action
+					) apply x -> ifNull(toString(x), ''))
+				)
+			)
+		) as checksum
+		FROM %s where %s >= $1 and %s <= $2`,
 		tableWithDb,
 		eventCreatedAtColumnName,
 		eventCreatedAtColumnName)
@@ -187,15 +197,10 @@ func (db ClickhouseDb) CheckSchema(canal *canal.Canal) error {
 			continue
 		}
 
-		log.Infoln("checking", table)
-		hashChecksum := false
 		hasEventCreatedAt := false
 		hasAction := false
 		for _, column := range columns {
 			switch column.Name {
-			// FIXME these column names seem ripe for collision
-			case checksumColumnName:
-				hashChecksum = true
 			case eventCreatedAtColumnName:
 				hasEventCreatedAt = true
 			case actionColumnName:
@@ -203,16 +208,12 @@ func (db ClickhouseDb) CheckSchema(canal *canal.Canal) error {
 			}
 		}
 
-		if !hashChecksum || !hasEventCreatedAt || !hasAction {
+		if !hasEventCreatedAt || !hasAction {
 			baseError := fmt.Sprintf("Clickhouse destination table %s is missing columns",
 				table)
 
 			columnStrings := make([]string, 0)
 
-			if !hashChecksum {
-				columnStrings = append(columnStrings,
-					fmt.Sprintf("%s UInt64", checksumColumnName))
-			}
 			if !hasEventCreatedAt {
 				columnStrings = append(columnStrings,
 					fmt.Sprintf("%s DateTime", eventCreatedAtColumnName))

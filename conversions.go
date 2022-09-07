@@ -117,16 +117,12 @@ func convertMysqlValue(col *schema.TableColumn, value interface{}) interface{} {
 
 var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
 
-func columnInMap(tableName string, columnName string, lookup map[string]map[string]bool) bool {
-	if v, ok := lookup[tableName]; ok {
+func isYamlColumn(tableName string, columnName string) bool {
+	if v, ok := yamlColumns[tableName]; ok {
 		return v[columnName]
 	} else {
 		return false
 	}
-}
-
-func isYamlColumn(tableName string, columnName string) bool {
-	return columnInMap(tableName, columnName, yamlColumns)
 }
 
 func parseString(value string, tableName string, columnName string) interface{} {

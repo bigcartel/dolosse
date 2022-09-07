@@ -14,7 +14,7 @@ func makeMap() StringMap {
 	m["id"] = 12
 	m["name"] = "sweet"
 	m["created_at"] = time.Unix(0, 0)
-	m["price"] = decimal.Decimal{}
+	m["price"] = decimal.NewFromFloat(10.99)
 	return m
 }
 
