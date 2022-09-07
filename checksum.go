@@ -3,16 +3,15 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 
-	"github.com/cespare/xxhash"
+	"github.com/go-faster/city"
 )
 
 // TODO also use xxhash to redact sensitive fields - auto detect certain field names
 // and also allow config of sensitive field names
 
 func checksumMapValues(m map[string]interface{}, ignoredColumns ...string) uint64 {
-	d := xxhash.New()
-
 	lookup := make(map[string]bool, len(ignoredColumns))
 	for _, v := range ignoredColumns {
 		lookup[v] = true
@@ -20,19 +19,14 @@ func checksumMapValues(m map[string]interface{}, ignoredColumns ...string) uint6
 
 	i := 0
 
-	keys := make([]string, len(m)-len(ignoredColumns))
-	for k := range m {
+	values := make([]string, len(m)-len(ignoredColumns))
+	for k, v := range m {
 		if !lookup[k] {
-			keys[i] = k
+			values[i] = fmt.Sprintf("%v", v)
 			i++
 		}
 	}
 
-	sort.Strings(keys)
-
-	for _, k := range keys {
-		d.Write([]byte(fmt.Sprintf("%v", m[k])))
-	}
-
-	return d.Sum64()
+	sort.Strings(values)
+	return city.CH64([]byte(strings.Join(values, "")))
 }

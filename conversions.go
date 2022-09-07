@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cespare/xxhash"
+	"github.com/go-faster/city"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/shopspring/decimal"
@@ -175,7 +175,7 @@ func anonymizeValue(value interface{}, table string, columnPath string) interfac
 	if anonymizeFields.Match([]byte(fieldString)) {
 		switch v := value.(type) {
 		case string:
-			return fmt.Sprint(xxhash.Sum64String(v))
+			return fmt.Sprint(city.CH64([]byte(v)))
 		}
 	}
 
