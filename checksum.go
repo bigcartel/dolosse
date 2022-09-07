@@ -9,17 +9,13 @@ import (
 	"github.com/go-faster/city"
 )
 
-func checksumMapValues(m map[string]interface{}, ignoredColumns ...string) uint64 {
-	lookup := make(map[string]bool, len(ignoredColumns))
-	for _, v := range ignoredColumns {
-		lookup[v] = true
-	}
-
+// TODO add divider and sort fields by clickhouse column order
+func checksumMapValues(m map[string]interface{}) uint64 {
 	i := 0
 
-	values := make([]string, len(m)-len(ignoredColumns))
-	for k, v := range m {
-		if !lookup[k] && v != nil {
+	values := make([]string, len(m))
+	for _, v := range m {
+		if v != nil {
 			switch c := v.(type) {
 			case time.Time:
 				values[i] = c.UTC().Format("2006-01-02 15:04:05")

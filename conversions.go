@@ -4,15 +4,10 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/go-faster/city"
-	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
-	"github.com/spf13/cast"
 	"gopkg.in/yaml.v3"
 )
 
