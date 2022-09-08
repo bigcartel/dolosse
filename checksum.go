@@ -1,32 +1,34 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/go-faster/city"
 )
 
-// TODO add divider and sort fields by clickhouse column order
-func checksumMapValues(m map[string]interface{}) uint64 {
-	i := 0
+func checksumMapValues(m map[string]interface{}, columns []ClickhouseQueryColumn) uint64 {
+	var b bytes.Buffer
 
-	values := make([]string, len(m))
-	for _, v := range m {
+	for _, c := range columns {
+		v := m[c.Name]
+		vs := ""
+
 		if v != nil {
 			switch c := v.(type) {
 			case time.Time:
-				values[i] = c.UTC().Format("2006-01-02 15:04:05")
+				vs = c.UTC().Format("2006-01-02 15:04:05")
 			default:
-				values[i] = fmt.Sprintf("%v", v)
+				vs = fmt.Sprintf("%v", v)
 			}
-			i++
+
+			b.WriteString(vs)
+			b.WriteRune(',')
 		}
 	}
 
-	sort.Strings(values)
-	concatenated := []byte(strings.Join(values, ","))
-	return city.CH64(concatenated)
+	b.Truncate(b.Len() - 1)
+
+	return city.CH64(b.Bytes())
 }

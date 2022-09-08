@@ -132,7 +132,7 @@ func processEventWorker(input <-chan RowEvent, output chan<- RowInsertData) {
 			continue
 		}
 
-		insertData, isDup := eventToClickhouseRowData(event.e, columns.columnLookup)
+		insertData, isDup := eventToClickhouseRowData(event.e, columns)
 
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
@@ -154,7 +154,7 @@ func startProcessEventsWorkers() {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns
-func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowInsertData, bool) {
+func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInsertData, bool) {
 	var previousRow []interface{}
 	tableName := e.Table.Name
 	hasPreviousEvent := len(e.Rows) == 2
@@ -170,7 +170,7 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowIn
 
 	for i, c := range e.Table.Columns {
 		columnName := c.Name
-		if columnLookup[columnName] {
+		if columns.columnLookup[columnName] {
 			if isDuplicate &&
 				hasPreviousEvent &&
 				!ignoredColumnsForDeduplication[columnName] &&
@@ -197,7 +197,7 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columnLookup LookupMap) (RowIn
 
 	Data[eventCreatedAtColumnName] = timestamp
 
-	checksum := checksumMapValues(Data)
+	checksum := checksumMapValues(Data, columns.columns)
 
 	Data[actionColumnName] = e.Action
 

@@ -85,12 +85,14 @@ func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 }
 
 func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
-	queryString := fmt.Sprintf(`SELECT
+	queryString := fmt.Sprintf(`
+		SELECT
 		id,
 		cityHash64(
 			arrayStringConcat(
-				arraySort(
-					array(* except(changelog_action) apply x -> ifNull(toString(x), ''))
+				arrayFilter(
+					x -> isNotNull(x),
+					array(* except(changelog_action) apply toString)
 				)
 			, ',')
 		) as checksum
