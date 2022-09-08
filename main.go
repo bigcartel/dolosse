@@ -166,7 +166,10 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 	}
 	row := e.Rows[newEventIdx]
 
-	isDuplicate := true
+	isDuplicate := false
+	if e.Action == "update" {
+		isDuplicate = true
+	}
 
 	for i, c := range e.Table.Columns {
 		columnName := c.Name
