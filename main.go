@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"reflect"
 	"runtime"
 	"sync/atomic"
 	"syscall"
@@ -24,9 +25,12 @@ var ignoredColumnsForDeduplication = map[string]bool{
 	"updated_at": true,
 }
 
-var clickhouseDb *string
-var clickhouseAddr *string
-var mysqlDb *string
+var clickhouseDb,
+	clickhouseAddr,
+	mysqlAddr,
+	mysqlUser,
+	mysqlPassword,
+	mysqlDb *string
 
 // TODO use this for global cache of clickhouse columns and update before each batch
 type ChColumnSet struct {
@@ -51,6 +55,8 @@ var processedRows = new(uint64)
 var skippedRowLevelDuplicates = new(uint64)
 var skippedBatchLevelDuplicates = new(uint64)
 var skippedPersistedDuplicates = new(uint64)
+var skippedDumpDuplicates = new(uint64)
+var dumping = atomic.Bool{}
 
 type ProcessRow struct {
 	canal.DummyEventHandler
@@ -73,9 +79,11 @@ type ClickhouseBatchRow struct {
 }
 
 type RowInsertData struct {
+	Id             *int64
 	EventTable     string
 	EventCreatedAt time.Time
 	EventChecksum  uint64
+	EventAction    string
 	Event          RowData
 }
 
@@ -105,6 +113,7 @@ func printStats() {
 	log.Infoln(*skippedRowLevelDuplicates, "skipped row level duplicate rows")
 	log.Infoln(*skippedBatchLevelDuplicates, "skipped batch level duplicate rows")
 	log.Infoln(*skippedPersistedDuplicates, "skipped persisted duplicate rows")
+	log.Infoln(*skippedDumpDuplicates, "skipped dump duplicate rows")
 }
 
 func incrementStat(counter *uint64) {
@@ -124,7 +133,10 @@ func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
 
 func processEventWorker(input <-chan RowEvent, output chan<- RowInsertData) {
 	for event := range input {
-		latestProcessingGtid <- event.lastSyncedGtidSet
+		if event.lastSyncedGtidSet != "" {
+			latestProcessingGtid <- event.lastSyncedGtidSet
+		}
+
 		columns, hasColumns := cachedChColumnsForTable(event.e.Table.Name)
 
 		if !hasColumns {
@@ -186,39 +198,53 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 		}
 	}
 
-	if isDuplicate {
-		return RowInsertData{}, true
-	}
-
+	// make this use updated_at if it exists on the row?
 	timestamp := time.Now()
-
 	if e.Header != nil {
 		timestamp = time.Unix(int64(e.Header.Timestamp), 0)
-	} else {
-		log.Infoln("Event header is nil, using now as event created at")
 	}
 
 	Data[eventCreatedAtColumnName] = timestamp
 
-	checksum := checksumMapValues(Data, columns.columns)
+	if isDuplicate {
+		return RowInsertData{}, true
+	}
 
+	checksum := checksumMapValues(Data, columns.columns)
 	Data[actionColumnName] = e.Action
 
+	var id *int64
+	maybeInt := reflect.ValueOf(Data["id"])
+	if maybeInt.CanInt() {
+		reflectId := reflect.ValueOf(Data["id"]).Int()
+		id = &reflectId
+	}
+
 	return RowInsertData{
+		Id:             id,
 		EventTable:     tableName,
 		EventCreatedAt: timestamp,
 		EventChecksum:  checksum,
+		EventAction:    e.Action,
 		Event:          Data,
 	}, false
 }
 
-func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
+func OnRow(e *canal.RowsEvent) error {
+	// TODO explore using this instead of IncludeTableRegex to filter by db
+	// will maybe be faster?
+	// e.Table.Schema
 	_, hasColumns := cachedChColumnsForTable(e.Table.Name)
 
 	if hasColumns {
+		gtidSetString := ""
+		gtidSet := syncCanal.SyncedGTIDSet()
+		if gtidSet != nil {
+			gtidSetString = gtidSet.String()
+		}
 		processRowsChannel <- RowEvent{
 			e:                 e,
-			lastSyncedGtidSet: syncCanal.SyncedGTIDSet().String(),
+			lastSyncedGtidSet: gtidSetString,
 		}
 
 		incrementStat(enqueuedRows)
@@ -227,12 +253,16 @@ func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
 	return nil
 }
 
+func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
+	return OnRow(e)
+}
+
 func tableWithDb(table string) string {
 	return fmt.Sprintf("%s.%s", *clickhouseDb, table)
 }
 
 func dupIdString(id interface{}, checksum interface{}) string {
-	return fmt.Sprintf("%d %v", id, checksum)
+	return fmt.Sprintf("%d %d", id, checksum)
 }
 
 func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
@@ -297,10 +327,27 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows []RowIns
 
 func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows []RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 
-	minCreatedAt, maxCreatedAt := getMinMaxCreatedAt(processedRows)
+	minMaxValues := getMinMaxValues(processedRows)
+	// TODO also special case any event type "dump" rows found here and check for ids in clickhouse that match.
+	// if any are found just skip those rows.
+	// if we do it that way, a dump can theoretically be kicked off in parallel with the binlog following.
+	// one question/concern: do we care that this approach means that some records will have their first entry in the db as "update"?
+	// I don't think that matters much.. It's more honest in some ways. Thinking about usage though:
+	// querying for first thing changed after record is created. differentiating between a dump and an insert is actually good for quality of data.
+	// so I think that's fine.
+
+	hasStoredIds := false
+	var storedIdsMap map[int64]bool
+
+	if dumping.Load() {
+		hasStoredIds, storedIdsMap = clickhouseDb.QueryIdRange(tableWithDb,
+			minMaxValues.minId,
+			minMaxValues.maxId)
+	}
+
 	hasDuplicates, duplicatesMap := clickhouseDb.QueryDuplicates(tableWithDb,
-		minCreatedAt,
-		maxCreatedAt)
+		minMaxValues.minCreatedAt,
+		minMaxValues.maxCreatedAt)
 
 	batchColumnArrays := make(ClickhouseBatchColumns, len(chColumns))
 	writeCount := 0
@@ -315,6 +362,11 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 
 		if rowInsertData.EventCreatedAt.Year() == 1 {
 			log.Panicln(rowInsertData)
+		}
+
+		if dumping.Load() && rowInsertData.EventAction == "dump" && hasStoredIds && rowInsertData.Id != nil && storedIdsMap[*rowInsertData.Id] {
+			incrementStat(skippedDumpDuplicates)
+			continue
 		}
 
 		writeCount++
@@ -367,11 +419,32 @@ func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchCol
 	checkErr(batch.Send())
 }
 
-func getMinMaxCreatedAt(rows []RowInsertData) (time.Time, time.Time) {
+type minMaxValues struct {
+	minCreatedAt time.Time
+	maxCreatedAt time.Time
+	minId        int64
+	maxId        int64
+}
+
+func getMinMaxValues(rows []RowInsertData) minMaxValues {
 	minCreatedAt := time.Time{}
 	maxCreatedAt := time.Time{}
+	var minId int64 = 0
+	var maxId int64 = 0
 
 	for _, r := range rows {
+		comparingId := reflect.ValueOf(r.Event["id"]).Int()
+
+		if minId == 0 {
+			minId = comparingId
+		} else if minId > comparingId {
+			minId = comparingId
+		}
+
+		if maxId < comparingId {
+			maxId = comparingId
+		}
+
 		comparingCreatedAt := r.EventCreatedAt
 
 		if minCreatedAt.Year() == 1 {
@@ -385,7 +458,12 @@ func getMinMaxCreatedAt(rows []RowInsertData) (time.Time, time.Time) {
 		}
 	}
 
-	return minCreatedAt, maxCreatedAt
+	return minMaxValues{
+		minCreatedAt: minCreatedAt,
+		maxCreatedAt: maxCreatedAt,
+		minId:        minId,
+		maxId:        maxId,
+	}
 }
 
 func batchWrite() {
@@ -426,15 +504,15 @@ func main() {
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
 
 	var (
-		mysqlAddr     = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
-		mysqlUser     = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
-		mysqlPassword = fs.String("mysql-password", "password", "mysql password (also via MYSQL_PASSWORD)")
 		forceDump     = fs.Bool("force-dump", false, "Force full data dump and reset stored binlog position")
 		startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
 		_             = fs.String("config", "", "config file (optional)")
 	)
 
 	mysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
+	mysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
+	mysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
+	mysqlPassword = fs.String("mysql-password", "password", "mysql password (also via MYSQL_PASSWORD)")
 	clickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
 	clickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to (also available via CLICKHOUSE_DB)")
 	// TODO make batch count and delivery timeout configurable
@@ -495,6 +573,8 @@ func main() {
 		log.Infoln(syncCanal.SyncedGTIDSet())
 		os.Exit(1)
 	}()
+
+	DumpMysqlDb()
 
 	if *forceDump {
 		clickhouseDb.SetGTIDString("")

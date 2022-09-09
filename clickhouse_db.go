@@ -84,6 +84,24 @@ func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 	return scannedRows
 }
 
+func (db ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, map[int64]bool) {
+	queryString := fmt.Sprintf(`
+		SELECT
+		id
+		FROM %s where id >= $1 and id <= $2`,
+		tableWithDb)
+
+	ids := db.Query(queryString, minId, maxId)
+
+	idsMap := make(map[int64]bool)
+
+	for _, row := range ids {
+		idsMap[reflect.ValueOf(row[0]).Int()] = true
+	}
+
+	return len(idsMap) > 0, idsMap
+}
+
 func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
 	queryString := fmt.Sprintf(`
 		SELECT
@@ -92,11 +110,12 @@ func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end 
 			arrayStringConcat(
 				arrayFilter(
 					x -> isNotNull(x),
-					array(* except(changelog_action) apply toString)
+					array(* except(%s) apply toString)
 				)
 			, ',')
 		) as checksum
 		FROM %s where %s >= $1 and %s <= $2`,
+		actionColumnName,
 		tableWithDb,
 		eventCreatedAtColumnName,
 		eventCreatedAtColumnName)
