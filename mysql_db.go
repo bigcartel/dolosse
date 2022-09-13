@@ -41,6 +41,36 @@ func DumpMysqlDb() {
 	dumping.Store(false)
 }
 
+type DumpFieldVal interface {
+	AsString() []byte
+	Value() interface{}
+}
+
+func parseMysqlDumpField(val DumpFieldVal, mysqlQueryFieldType uint8) interface{} {
+	switch mysqlQueryFieldType {
+	case mysql.MYSQL_TYPE_DATETIME, mysql.MYSQL_TYPE_TIMESTAMP:
+		vs := string(val.AsString())
+		if len(vs) > 0 {
+			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
+			checkErr(err)
+			return vt
+		} else {
+			return val.Value()
+		}
+	case mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
+		vs := string(val.AsString())
+		if len(vs) > 0 {
+			val, err := decimal.NewFromString(string(val.AsString()))
+			checkErr(err)
+			return val
+		} else {
+			return val.Value()
+		}
+	default:
+		return val.Value()
+	}
+}
+
 // TODO write some tests for this?
 func dumpTable(conn *client.Conn, dbName, tableName string) {
 	var result mysql.Result
@@ -48,30 +78,7 @@ func dumpTable(conn *client.Conn, dbName, tableName string) {
 		values := make([]interface{}, len(row))
 
 		for idx, val := range row {
-			field := result.Fields[idx]
-
-			switch field.Type {
-			case mysql.MYSQL_TYPE_DATETIME, mysql.MYSQL_TYPE_TIMESTAMP:
-				vs := string(val.AsString())
-				if len(vs) > 0 {
-					vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
-					checkErr(err)
-					values[idx] = vt
-				} else {
-					values[idx] = val.Value()
-				}
-			case mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
-				vs := string(val.AsString())
-				if len(vs) > 0 {
-					val, err := decimal.NewFromString(string(val.AsString()))
-					checkErr(err)
-					values[idx] = val
-				} else {
-					values[idx] = val.Value()
-				}
-			default:
-				values[idx] = val.Value()
-			}
+			values[idx] = parseMysqlDumpField(&val, result.Fields[idx].Type)
 		}
 
 		processDumpData(dbName, tableName, values)
