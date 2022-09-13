@@ -288,7 +288,7 @@ func (db ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMap
 
 var gtidSetKey string = "last_synced_gtid_set"
 
-func (db ClickhouseDb) GetGTIDSet() mysql.GTIDSet {
+func (db ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 	type storedGtidSet struct {
 		Value string `ch:"value"`
 	}
@@ -304,7 +304,7 @@ func (db ClickhouseDb) GetGTIDSet() mysql.GTIDSet {
 		log.Fatal(err)
 	}
 
-	gtidString := ""
+	gtidString := fallback
 	if len(rows) > 0 {
 		gtidString = rows[0].Value
 	}

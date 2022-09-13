@@ -13,13 +13,16 @@ import (
 	_ "github.com/go-mysql-org/go-mysql/driver"
 )
 
-func establishMysqlConnection() *client.Conn {
-	conn, err := client.Connect(*mysqlAddr, *mysqlUser, *mysqlPassword, *mysqlDb)
-	checkErr(err)
-	return conn
+func getEarliestGtidStartPoint(mysqlCanal *canal.Canal) string {
+	rr, err := mysqlCanal.Execute("select @@GLOBAL.gtid_purged;")
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return string(rr.Values[0][0].AsString())
 }
 
-// TODO do I even need this? Should I instead refresh clickhouse columns in the dump routine?
 func getMysqlTableNames(mysqlCanal *canal.Canal) []string {
 	rr, err := mysqlCanal.Execute(fmt.Sprintf("SHOW TABLES FROM %s", *mysqlDb))
 	if err != nil {
@@ -34,10 +37,21 @@ func getMysqlTableNames(mysqlCanal *canal.Canal) []string {
 	return tables
 }
 
+func establishMysqlConnection() *client.Conn {
+	conn, err := client.Connect(*mysqlAddr, *mysqlUser, *mysqlPassword, *mysqlDb)
+	checkErr(err)
+	return conn
+}
+
 func DumpMysqlDb() {
 	dumping.Store(true)
+
 	conn := establishMysqlConnection()
-	dumpTable(conn, "bigcartel", "products")
+	// TODO paralellize with either worker or waitgroup pattern.
+	for table := range *chColumns.m {
+		dumpTable(conn, *mysqlDb, table)
+	}
+
 	dumping.Store(false)
 }
 

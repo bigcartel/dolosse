@@ -57,6 +57,7 @@ var skippedBatchLevelDuplicates = new(uint64)
 var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
 var dumping = atomic.Bool{}
+var shouldDump = atomic.Bool{} // TODO set to true if no gtid key is found in clickhouse? that way it always dumps on first run
 
 type ProcessRow struct {
 	canal.DummyEventHandler
@@ -475,6 +476,13 @@ func batchWrite() {
 	counter := 0
 
 	deliver := func() {
+		log.Infoln("replication delay is", syncCanal.GetDelay(), "seconds")
+		if shouldDump.Load() && syncCanal.GetDelay() < 10 {
+			shouldDump.Store(false)
+			go DumpMysqlDb()
+			log.Infoln("Started mysql db dump")
+		}
+
 		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
 		printStats()
 		timer = time.NewTimer(10 * time.Second)
@@ -530,9 +538,8 @@ func main() {
 	cfg.Addr = *mysqlAddr
 	cfg.User = *mysqlUser
 	cfg.Password = *mysqlPassword
-	cfg.Dump.TableDB = *mysqlDb
-	cfg.Dump.Tables = []string{"plans"}
 	log.Infoln(fmt.Sprintf("%s.*", *mysqlDb))
+	cfg.Dump.ExecutionPath = "" // don't use mysqldump
 	cfg.IncludeTableRegex = []string{fmt.Sprintf("%s..*", *mysqlDb)}
 	cfg.UseDecimal = true
 	cfg.ParseTime = true
@@ -574,16 +581,19 @@ func main() {
 		os.Exit(1)
 	}()
 
-	DumpMysqlDb()
+	// TODO how do we determine what should be dumped on a startup?
+	// should it check a clickhouse table config to determine status?
+	minimumStartingGtid := getEarliestGtidStartPoint(syncCanal)
 
 	if *forceDump {
-		clickhouseDb.SetGTIDString("")
-		checkErr(syncCanal.Run())
+		shouldDump.Store(true)
+		clickhouseDb.SetGTIDString(minimumStartingGtid)
+		checkErr(syncCanal.StartFromGTID(clickhouseDb.GetGTIDSet(minimumStartingGtid)))
 	} else {
 		if *startFromGtid != "" {
 			clickhouseDb.SetGTIDString(*startFromGtid)
 		}
 
-		checkErr(syncCanal.StartFromGTID(clickhouseDb.GetGTIDSet()))
+		checkErr(syncCanal.StartFromGTID(clickhouseDb.GetGTIDSet(minimumStartingGtid)))
 	}
 }
