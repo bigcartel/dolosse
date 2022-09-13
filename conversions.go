@@ -11,10 +11,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const mysqlDateFormat = "2006-01-02"
-
+// could instead be comma separate list of table.column paths provided via CLI.
+// Could also infer and attempt to parse if the destination column is JSON type.
 // TODO either move to config or infer from string text if a config is set to true?
-// could this also pick what fields I want to extract?
 // Could this also work with json columns/ruby serialized columns in a generic way?
 var yamlColumns = map[string]map[string]bool{
 	"theme_instances": {
