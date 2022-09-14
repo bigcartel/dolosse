@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"runtime/pprof"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -80,19 +81,16 @@ type ClickhouseBatchRow struct {
 }
 
 type RowInsertData struct {
-	Id             *int64
-	EventTable     string
-	EventCreatedAt time.Time
-	EventChecksum  uint64
-	EventAction    string
-	Event          RowData
+	Id               *int64
+	EventTable       string
+	EventCreatedAt   time.Time
+	EventChecksum    uint64
+	EventAction      string
+	DeduplicationKey string
+	Event            RowData
 }
 
 type EventsByTable map[string][]RowInsertData
-
-func (r RowInsertData) eventDeduplicationKey() string {
-	return dupIdString(r.Event["id"], r.EventChecksum)
-}
 
 func syncChColumns(clickhouseDb ClickhouseDb) {
 	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables(syncCanal)
@@ -149,7 +147,7 @@ func processEventWorker(input <-chan RowEvent, output chan<- RowInsertData) {
 
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
-		} else if batchDuplicatesFilter.TestAndAdd([]byte(insertData.eventDeduplicationKey())) {
+		} else if batchDuplicatesFilter.TestAndAdd([]byte(insertData.DeduplicationKey)) {
 			incrementStat(skippedBatchLevelDuplicates)
 		} else {
 			output <- insertData
@@ -222,12 +220,13 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 	}
 
 	return RowInsertData{
-		Id:             id,
-		EventTable:     tableName,
-		EventCreatedAt: timestamp,
-		EventChecksum:  checksum,
-		EventAction:    e.Action,
-		Event:          Data,
+		Id:               id,
+		EventTable:       tableName,
+		EventCreatedAt:   timestamp,
+		EventChecksum:    checksum,
+		EventAction:      e.Action,
+		DeduplicationKey: dupIdString(id, checksum),
+		Event:            Data,
 	}, false
 }
 
@@ -243,6 +242,7 @@ func OnRow(e *canal.RowsEvent) error {
 		if gtidSet != nil {
 			gtidSetString = gtidSet.String()
 		}
+
 		processRowsChannel <- RowEvent{
 			e:                 e,
 			lastSyncedGtidSet: gtidSetString,
@@ -354,7 +354,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	writeCount := 0
 
 	for _, rowInsertData := range processedRows {
-		dedupeKey := rowInsertData.eventDeduplicationKey()
+		dedupeKey := rowInsertData.DeduplicationKey
 
 		if hasDuplicates && duplicatesMap[dedupeKey] {
 			incrementStat(skippedPersistedDuplicates)
@@ -436,14 +436,19 @@ func getMinMaxValues(rows []RowInsertData) minMaxValues {
 	for _, r := range rows {
 		comparingId := reflect.ValueOf(r.Event["id"]).Int()
 
-		if minId == 0 {
-			minId = comparingId
-		} else if minId > comparingId {
-			minId = comparingId
-		}
+		// we only care about min and max ids of dump events
+		// this is important since dump is unique in that ids
+		// are sequential
+		if r.EventAction == "dump" {
+			if minId == 0 {
+				minId = comparingId
+			} else if minId > comparingId {
+				minId = comparingId
+			}
 
-		if maxId < comparingId {
-			maxId = comparingId
+			if maxId < comparingId {
+				maxId = comparingId
+			}
 		}
 
 		comparingCreatedAt := r.EventCreatedAt
@@ -513,6 +518,7 @@ func main() {
 
 	var (
 		forceDump     = fs.Bool("force-dump", false, "Force full data dump and reset stored binlog position")
+		profile       = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 		startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
 		_             = fs.String("config", "", "config file (optional)")
 	)
@@ -532,6 +538,19 @@ func main() {
 
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *profile == true {
+		log.Infoln("STARTING IN PROFILING MODE - profile results will be written to cpu.pprof and mem.pprof on shutdown")
+		f, perr := os.Create("cpu.pprof")
+		if perr != nil {
+			log.Fatal(perr)
+		}
+		defer f.Close()
+		err := pprof.StartCPUProfile(f)
+		if err != nil {
+			log.Fatal("could not start profiler: ", err)
+		}
 	}
 
 	cfg := canal.NewDefaultConfig()
@@ -574,10 +593,25 @@ func main() {
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
-		close(processRowsChannel)
-		close(batchWriteChannel)
-		close(latestProcessingGtid)
+		// TODO this doesn't handle anything gracefully - such that we don't get writes on a closed chan
+		// https://callistaenterprise.se/blogg/teknik/2019/10/05/go-worker-cancellation/
+		// close(processRowsChannel)
+		// close(batchWriteChannel)
+		// close(latestProcessingGtid)
 		log.Infoln(syncCanal.SyncedGTIDSet())
+		pprof.StopCPUProfile()
+
+		f, err := os.Create("mem.pprof")
+		if err != nil {
+			log.Fatal("could not create memory profile: ", err)
+		}
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Fatal("could not write memory profile: ", err)
+		}
+
+		runtime.GC()
 		os.Exit(1)
 	}()
 

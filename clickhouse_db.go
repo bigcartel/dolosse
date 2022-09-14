@@ -92,8 +92,9 @@ func (db ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64
 		tableWithDb)
 
 	ids := db.Query(queryString, minId, maxId)
+	log.Infoln("number of ids returned", len(ids))
 
-	idsMap := make(map[int64]bool)
+	idsMap := make(map[int64]bool, len(ids))
 
 	for _, row := range ids {
 		idsMap[reflect.ValueOf(row[0]).Int()] = true

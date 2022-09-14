@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -25,8 +26,18 @@ var yamlColumns = map[string]map[string]bool{
 	},
 }
 
-// TODO flesh out this regexp/make configurable
-var anonymizeFields = regexp.MustCompile(".*(address|street|password|salt|email|longitude|latitude).*|payment_methods.properties|products.description")
+// TODO make this a configurable arg of comma separated strings
+var anonymizeFields = [][]byte{
+	[]byte("address"),
+	[]byte("street"),
+	[]byte("password"),
+	[]byte("salt"),
+	[]byte("email"),
+	[]byte("longitude"),
+	[]byte("latitude"),
+	[]byte("payment_methods.properties"),
+	[]byte("products.description"),
+}
 
 var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
 
@@ -77,11 +88,28 @@ func parseValue(value interface{}, tableName string, columnName string) interfac
 	}
 }
 
+func isAnonymizedField(s *[]byte) bool {
+	for i := range anonymizeFields {
+		if bytes.Contains(*s, anonymizeFields[i]) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func fieldString(table *string, columnPath *string) *[]byte {
+	bs := make([]byte, len(*table)+len(*columnPath)+1)
+	l := 0
+	l += copy(bs[l:], *table)
+	l += copy(bs[l:], ".")
+	copy(bs[l:], *columnPath)
+	return &bs
+}
+
 // currently only supports strings
 func anonymizeValue(value interface{}, table string, columnPath string) interface{} {
-	fieldString := fmt.Sprintf("%s.%s", table, columnPath)
-
-	if anonymizeFields.Match([]byte(fieldString)) {
+	if isAnonymizedField(fieldString(&table, &columnPath)) {
 		switch v := value.(type) {
 		case string:
 			return fmt.Sprint(city.CH64([]byte(v)))
