@@ -417,18 +417,18 @@ func getMinMaxValues(rows []RowInsertData) minMaxValues {
 			if maxId < comparingId {
 				maxId = comparingId
 			}
-		}
+		} else {
+			comparingCreatedAt := r.EventCreatedAt
 
-		comparingCreatedAt := r.EventCreatedAt
+			if minCreatedAt.Year() == 1 {
+				minCreatedAt = comparingCreatedAt
+			} else if minCreatedAt.After(comparingCreatedAt) {
+				minCreatedAt = comparingCreatedAt
+			}
 
-		if minCreatedAt.Year() == 1 {
-			minCreatedAt = comparingCreatedAt
-		} else if minCreatedAt.After(comparingCreatedAt) {
-			minCreatedAt = comparingCreatedAt
-		}
-
-		if maxCreatedAt.Before(comparingCreatedAt) {
-			maxCreatedAt = comparingCreatedAt
+			if maxCreatedAt.Before(comparingCreatedAt) {
+				maxCreatedAt = comparingCreatedAt
+			}
 		}
 	}
 
