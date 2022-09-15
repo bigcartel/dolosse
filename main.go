@@ -545,6 +545,7 @@ func main() {
 	go func() {
 		<-ch
 		pprof.StopCPUProfile()
+		log.Infoln("wrote cpu profile")
 
 		f, err := os.Create("mem.pprof")
 		if err != nil {
@@ -555,6 +556,7 @@ func main() {
 		if err := pprof.WriteHeapProfile(f); err != nil {
 			log.Fatal("could not write memory profile: ", err)
 		}
+		log.Infoln("wrote mem profile")
 
 		os.Exit(1)
 	}()
