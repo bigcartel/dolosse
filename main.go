@@ -188,7 +188,7 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 			if isDuplicate &&
 				hasPreviousEvent &&
 				!ignoredColumnsForDeduplication[columnName] &&
-				(fmt.Sprint(row[i]) != fmt.Sprint(previousRow[i])) {
+				!reflect.DeepEqual(row[i], previousRow[i]) {
 				isDuplicate = false
 			}
 
