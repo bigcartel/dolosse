@@ -71,7 +71,7 @@ type ClickhouseBatchRow struct {
 }
 
 type RowInsertData struct {
-	Id               *int64
+	Id               int64
 	EventTable       string
 	EventCreatedAt   time.Time
 	EventChecksum    uint64
@@ -97,9 +97,9 @@ func syncChColumns(clickhouseDb ClickhouseDb) {
 }
 
 func printStats() {
+	log.Infoln(*processedRows, "processed rows")
 	log.Infoln(*deliveredRows, "delivered rows")
 	log.Infoln(*enqueuedRows, "enqueued rows")
-	log.Infoln(*processedRows, "processed rows")
 	log.Infoln(*skippedRowLevelDuplicates, "skipped row level duplicate rows")
 	log.Infoln(*skippedBatchLevelDuplicates, "skipped batch level duplicate rows")
 	log.Infoln(*skippedPersistedDuplicates, "skipped persisted duplicate rows")
@@ -203,11 +203,10 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	checksum := checksumMapValues(Data, columns.columns)
 	Data[actionColumnName] = e.Action
 
-	var id *int64
+	var id int64
 	maybeInt := reflect.ValueOf(Data["id"])
 	if maybeInt.CanInt() {
-		reflectId := reflect.ValueOf(Data["id"]).Int()
-		id = &reflectId
+		id = reflect.ValueOf(Data["id"]).Int()
 	}
 
 	return &RowInsertData{
@@ -333,7 +332,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 			log.Panicln(rowInsertData)
 		}
 
-		if dumping.Load() && rowInsertData.EventAction == "dump" && hasStoredIds && rowInsertData.Id != nil && storedIdsMap[*rowInsertData.Id] {
+		if dumping.Load() && rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap[rowInsertData.Id] {
 			incrementStat(skippedDumpDuplicates)
 			continue
 		}
