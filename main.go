@@ -18,7 +18,6 @@ import (
 
 	"sync"
 
-	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/siddontang/go-log/log"
 )
 
@@ -33,7 +32,8 @@ var clickhouseDb,
 	mysqlPassword,
 	mysqlDb *string
 
-// TODO use this for global cache of clickhouse columns and update before each batch
+var mysqlDbByte []byte
+
 type ChColumnSet struct {
 	columns      []ClickhouseQueryColumn
 	columnLookup LookupMap
@@ -46,10 +46,9 @@ var chColumns = NewConcurrentMap[ChColumnSet]()
 // behaves a bit like a fixed size hash map that doesn't handle conflicts
 var batchDuplicatesFilter = boom.NewInverseBloomFilter(1000000)
 
-var processRowsChannel = make(chan RowEvent, 10000)
-var batchWriteChannel = make(chan RowInsertData, 10000)
+var processRowsChannel = make(chan *MysqlReplicationRowEvent, 10000)
+var batchWriteChannel = make(chan *RowInsertData, 10000)
 var latestProcessingGtid = make(chan string)
-var syncCanal *canal.Canal
 var deliveredRows = new(uint64)
 var enqueuedRows = new(uint64)
 var processedRows = new(uint64)
@@ -59,15 +58,6 @@ var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
 var dumping = atomic.Bool{}
 var shouldDump = atomic.Bool{} // TODO set to true if no gtid key is found in clickhouse? that way it always dumps on first run
-
-type ProcessRow struct {
-	canal.DummyEventHandler
-}
-
-type RowEvent struct {
-	e                 *canal.RowsEvent
-	lastSyncedGtidSet string
-}
 
 type LookupMap map[string]bool
 
@@ -93,7 +83,8 @@ type RowInsertData struct {
 type EventsByTable map[string][]RowInsertData
 
 func syncChColumns(clickhouseDb ClickhouseDb) {
-	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables(syncCanal)
+	conn := establishMysqlConnection()
+	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables(conn)
 
 	for table := range existingClickhouseTables {
 		cols, lookup := clickhouseDb.Columns(table)
@@ -130,20 +121,20 @@ func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
 	return columns, (columns != nil && len(columns.columns) > 0)
 }
 
-func processEventWorker(input <-chan RowEvent, output chan<- RowInsertData) {
+func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *RowInsertData) {
 	for event := range input {
-		if event.lastSyncedGtidSet != "" {
-			latestProcessingGtid <- event.lastSyncedGtidSet
+		if event.Gtid != "" {
+			latestProcessingGtid <- event.Gtid
 		}
 
-		columns, hasColumns := cachedChColumnsForTable(event.e.Table.Name)
+		columns, hasColumns := cachedChColumnsForTable(event.Table.Name)
 
 		if !hasColumns {
 			incrementStat(processedRows)
 			continue
 		}
 
-		insertData, isDup := eventToClickhouseRowData(event.e, columns)
+		insertData, isDup := eventToClickhouseRowData(event, columns)
 
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
@@ -165,7 +156,7 @@ func startProcessEventsWorkers() {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns
-func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInsertData, bool) {
+func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet) (*RowInsertData, bool) {
 	var previousRow []interface{}
 	tableName := e.Table.Name
 	hasPreviousEvent := len(e.Rows) == 2
@@ -199,14 +190,14 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 
 	// make this use updated_at if it exists on the row?
 	timestamp := time.Now()
-	if e.Header != nil {
-		timestamp = time.Unix(int64(e.Header.Timestamp), 0)
+	if e.Timestamp > 0 {
+		timestamp = time.Unix(int64(e.Timestamp), 0)
 	}
 
 	Data[eventCreatedAtColumnName] = timestamp
 
 	if isDuplicate {
-		return RowInsertData{}, true
+		return &RowInsertData{}, true
 	}
 
 	checksum := checksumMapValues(Data, columns.columns)
@@ -219,7 +210,7 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 		id = &reflectId
 	}
 
-	return RowInsertData{
+	return &RowInsertData{
 		Id:               id,
 		EventTable:       tableName,
 		EventCreatedAt:   timestamp,
@@ -230,32 +221,9 @@ func eventToClickhouseRowData(e *canal.RowsEvent, columns *ChColumnSet) (RowInse
 	}, false
 }
 
-func OnRow(e *canal.RowsEvent) error {
-	// TODO explore using this instead of IncludeTableRegex to filter by db
-	// will maybe be faster?
-	// e.Table.Schema
-	_, hasColumns := cachedChColumnsForTable(e.Table.Name)
-
-	if hasColumns {
-		gtidSetString := ""
-		gtidSet := syncCanal.SyncedGTIDSet()
-		if gtidSet != nil {
-			gtidSetString = gtidSet.String()
-		}
-
-		processRowsChannel <- RowEvent{
-			e:                 e,
-			lastSyncedGtidSet: gtidSetString,
-		}
-
-		incrementStat(enqueuedRows)
-	}
-
-	return nil
-}
-
-func (h *ProcessRow) OnRow(e *canal.RowsEvent) error {
-	return OnRow(e)
+func OnRow(e *MysqlReplicationRowEvent) {
+	processRowsChannel <- e
+	incrementStat(enqueuedRows)
 }
 
 func tableWithDb(table string) string {
@@ -481,8 +449,9 @@ func batchWrite() {
 	counter := 0
 
 	deliver := func() {
-		log.Infoln("replication delay is", syncCanal.GetDelay(), "seconds")
-		if shouldDump.Load() && syncCanal.GetDelay() < 10 {
+		// Could also get delay by peeking events periodicially to avoid computing it
+		log.Infoln("replication delay is", replicationDelay.Load(), "seconds")
+		if shouldDump.Load() && replicationDelay.Load() < 10 {
 			shouldDump.Store(false)
 			go DumpMysqlDb()
 			log.Infoln("Started mysql db dump")
@@ -491,6 +460,7 @@ func batchWrite() {
 		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
 		printStats()
 		timer = time.NewTimer(10 * time.Second)
+		// TODO how can I pre-allocate the slices in this?
 		eventsByTable = make(EventsByTable)
 		counter = 0
 	}
@@ -502,7 +472,7 @@ func batchWrite() {
 		case gtid := <-latestProcessingGtid:
 			lastGtidSet = gtid
 		case e := <-batchWriteChannel:
-			eventsByTable[e.EventTable] = append(eventsByTable[e.EventTable], e)
+			eventsByTable[e.EventTable] = append(eventsByTable[e.EventTable], *e)
 
 			if counter == 100000 {
 				deliver()
@@ -540,6 +510,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	mysqlDbByte = []byte(*mysqlDb)
+
 	if *profile == true {
 		log.Infoln("STARTING IN PROFILING MODE - profile results will be written to cpu.pprof and mem.pprof on shutdown")
 		f, perr := os.Create("cpu.pprof")
@@ -553,36 +525,15 @@ func main() {
 		}
 	}
 
-	cfg := canal.NewDefaultConfig()
-	cfg.Addr = *mysqlAddr
-	cfg.User = *mysqlUser
-	cfg.Password = *mysqlPassword
-	log.Infoln(fmt.Sprintf("%s.*", *mysqlDb))
-	cfg.Dump.ExecutionPath = "" // don't use mysqldump
-	cfg.IncludeTableRegex = []string{fmt.Sprintf("%s..*", *mysqlDb)}
-	cfg.UseDecimal = true
-	cfg.ParseTime = true
-	cfg.TimestampStringLocation = time.UTC
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
 	clickhouseDb := establishClickhouseConnection()
 	clickhouseDb.Setup()
+	mysqlConn := establishMysqlConnection()
+
 	// TODO validate all clickhouse table columns are compatible with mysql table columns
 	// and that clickhouse tables have event_created_at DateTime, id same_as_mysql, action string
 	// use the clickhouse mysql table function with the credentials provided to this command
 	// to do it using clickhouse translated types for max compat
-
-	syncCanal, err = canal.NewCanal(cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	clickhouseDb.CheckSchema(syncCanal)
-
-	syncCanal.SetEventHandler(&ProcessRow{})
+	clickhouseDb.CheckSchema(mysqlConn)
 
 	syncChColumns(clickhouseDb)
 
@@ -593,12 +544,6 @@ func main() {
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
-		// TODO this doesn't handle anything gracefully - such that we don't get writes on a closed chan
-		// https://callistaenterprise.se/blogg/teknik/2019/10/05/go-worker-cancellation/
-		// close(processRowsChannel)
-		// close(batchWriteChannel)
-		// close(latestProcessingGtid)
-		log.Infoln(syncCanal.SyncedGTIDSet())
 		pprof.StopCPUProfile()
 
 		f, err := os.Create("mem.pprof")
@@ -611,23 +556,24 @@ func main() {
 			log.Fatal("could not write memory profile: ", err)
 		}
 
-		runtime.GC()
 		os.Exit(1)
 	}()
 
 	// TODO how do we determine what should be dumped on a startup?
 	// should it check a clickhouse table config to determine status?
-	minimumStartingGtid := getEarliestGtidStartPoint(syncCanal)
+	minimumStartingGtid := getEarliestGtidStartPoint(mysqlConn)
+
+	// shouldDump.Store(true) // temp to test
 
 	if *forceDump {
 		shouldDump.Store(true)
 		clickhouseDb.SetGTIDString(minimumStartingGtid)
-		checkErr(syncCanal.StartFromGTID(clickhouseDb.GetGTIDSet(minimumStartingGtid)))
+		startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
 	} else {
 		if *startFromGtid != "" {
 			clickhouseDb.SetGTIDString(*startFromGtid)
 		}
 
-		checkErr(syncCanal.StartFromGTID(clickhouseDb.GetGTIDSet(minimumStartingGtid)))
+		startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
 	}
 }

@@ -6,6 +6,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.3.0
 	github.com/go-faster/city v1.0.1
 	github.com/go-mysql-org/go-mysql v1.6.0
+	github.com/google/uuid v1.3.0
 	github.com/peterbourgon/ff/v3 v3.3.0
 	github.com/shopspring/decimal v1.3.1
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07
@@ -19,7 +20,6 @@ require (
 	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/d4l3k/messagediff v1.2.1 // indirect
 	github.com/go-faster/errors v0.6.1 // indirect
-	github.com/google/uuid v1.3.0 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/paulmach/orb v0.7.1 // indirect

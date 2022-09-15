@@ -9,7 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/go-mysql-org/go-mysql/canal"
+	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/siddontang/go-log/log"
 )
@@ -163,8 +163,8 @@ type ChColumnInfo struct {
 
 type ChColumnMap map[string][]ChColumnInfo
 
-func (db ClickhouseDb) ColumnsForMysqlTables(canal *canal.Canal) ChColumnMap {
-	mysqlTables := getMysqlTableNames(canal)
+func (db ClickhouseDb) ColumnsForMysqlTables(mysqlConn *client.Conn) ChColumnMap {
+	mysqlTables := getMysqlTableNames(mysqlConn)
 	clickhouseTableMap := db.getColumnMap()
 	columnsForTables := make(ChColumnMap, len(mysqlTables))
 
@@ -208,8 +208,8 @@ func (db ClickhouseDb) getColumnMap() ChColumnMap {
 	return columns
 }
 
-func (db ClickhouseDb) CheckSchema(canal *canal.Canal) error {
-	clickhouseColumnsByTable := db.ColumnsForMysqlTables(syncCanal)
+func (db ClickhouseDb) CheckSchema(mysqlConn *client.Conn) error {
+	clickhouseColumnsByTable := db.ColumnsForMysqlTables(mysqlConn)
 
 	for table, columns := range clickhouseColumnsByTable {
 		if len(columns) == 0 {

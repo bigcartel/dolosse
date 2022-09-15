@@ -4,17 +4,19 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/go-mysql-org/go-mysql/canal"
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
 
 	_ "github.com/go-mysql-org/go-mysql/driver"
 )
 
-func getEarliestGtidStartPoint(mysqlCanal *canal.Canal) string {
-	rr, err := mysqlCanal.Execute("select @@GLOBAL.gtid_purged;")
+var mysqlColumns = NewConcurrentMap[*schema.Table]()
+
+func getEarliestGtidStartPoint(conn *client.Conn) string {
+	rr, err := conn.Execute("select @@GLOBAL.gtid_purged;")
 
 	if err != nil {
 		log.Fatal(err)
@@ -23,8 +25,8 @@ func getEarliestGtidStartPoint(mysqlCanal *canal.Canal) string {
 	return string(rr.Values[0][0].AsString())
 }
 
-func getMysqlTableNames(mysqlCanal *canal.Canal) []string {
-	rr, err := mysqlCanal.Execute(fmt.Sprintf("SHOW TABLES FROM %s", *mysqlDb))
+func getMysqlTableNames(conn *client.Conn) []string {
+	rr, err := conn.Execute(fmt.Sprintf("SHOW TABLES FROM %s", *mysqlDb))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -35,6 +37,22 @@ func getMysqlTableNames(mysqlCanal *canal.Canal) []string {
 	}
 
 	return tables
+}
+
+// TODO could I use this same method for getting clickhouse tables?
+// lazy load instead of doing a scheduled load at a particular time?
+// TODO this needs to be reset as well on alter tables
+func getMysqlTable(conn *client.Conn, db, table string) *schema.Table {
+	v := mysqlColumns.get(table)
+
+	if v != nil {
+		return *v
+	} else {
+		t, err := schema.NewTable(conn, db, table)
+		checkErr(err)
+		mysqlColumns.set(table, &t)
+		return t
+	}
 }
 
 func establishMysqlConnection() *client.Conn {
@@ -95,7 +113,7 @@ func dumpTable(conn *client.Conn, dbName, tableName string) {
 			values[idx] = parseMysqlDumpField(&val, result.Fields[idx].Type)
 		}
 
-		processDumpData(dbName, tableName, values)
+		processDumpData(conn, dbName, tableName, values)
 
 		return nil
 	}, nil)
@@ -103,17 +121,19 @@ func dumpTable(conn *client.Conn, dbName, tableName string) {
 	checkErr(err)
 }
 
-func processDumpData(dbName string, tableName string, values []interface{}) error {
-	tableInfo, err := syncCanal.GetTable(dbName, tableName)
-	if err != nil {
-		checkErr(err)
+func processDumpData(conn *client.Conn, dbName string, tableName string, values []interface{}) {
+	_, hasColumns := cachedChColumnsForTable(tableName)
+	if !hasColumns {
+		return
 	}
 
-	event := canal.RowsEvent{
+	tableInfo := getMysqlTable(conn, dbName, tableName)
+
+	event := MysqlReplicationRowEvent{
 		Table:  tableInfo,
-		Action: "dump",
 		Rows:   [][]interface{}{values},
+		Action: "dump",
 	}
 
-	return OnRow(&event)
+	OnRow(&event)
 }
