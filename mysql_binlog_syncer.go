@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
+	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/google/uuid"
 )
 
@@ -62,29 +62,30 @@ func startReplication(gtidSet mysql.GTIDSet) {
 
 	conn := establishMysqlConnection()
 
+	var action string
+	var lastGTIDString string
+
 	for {
 		ev, err := streamer.GetEvent(context.Background())
 		checkErr(err)
 
 		// TODO make this an enum so it doesn't allocate a string for every event
-		var action string
-		var lastGTIDString string
 
 		// TODO pass context into here and select on it - if done print last gtid string
 		// This is a partial copy of
 		// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133
 		// but simplified so we're not paying the performance overhead for events
 		// we don't care about
-		switch e := ev.Event.(type) {
-		// the basic idea here would be to handle rows event, gtid, and xid events and ignore the rest.
+		// the basic idea is to handle rows event, gtid, and xid events and ignore the rest.
 		// maybe if there's a way to detect alter table events it could use that and refresh the given table if it gets one.
-		case *replication.MariadbGTIDEvent:
-			lastGTIDString = e.GTID.String()
+		switch e := ev.Event.(type) {
+		// case *replication.MariadbGTIDEvent:
+		// 	lastGTIDString = e.GTID.String()
 		case *replication.GTIDEvent:
 			u, _ := uuid.FromBytes(e.SID)
-			lastGTIDString = u.String() + ":" + strconv.FormatInt(e.GNO, 10)
+			lastGTIDString = u.String() + ":1-" + strconv.FormatInt(e.GNO, 10)
 		case *replication.QueryEvent:
-			// TODO do a naive check for alter table here 
+			// TODO do a naive check for alter table here
 			// - if an alter table is detected clear the mysql table cache used to decode events
 			// log.Infoln(string(e.Query))
 		case *replication.RowsEvent:
@@ -112,14 +113,16 @@ func startReplication(gtidSet mysql.GTIDSet) {
 			table := getMysqlTable(conn, string(e.Table.Schema), string(e.Table.Table))
 
 			rowE := MysqlReplicationRowEvent{
-				Table:  table,
-				Rows:   e.Rows,
-				Action: action,
+				Table:     table,
+				Rows:      e.Rows,
+				Action:    action,
 				Timestamp: ev.Header.Timestamp,
-				Gtid: lastGTIDString,
+				Gtid:      lastGTIDString,
 			}
 
 			OnRow(&rowE)
 		}
+
+		updateReplicationDelay(ev.Header.Timestamp)
 	}
 }
