@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/go-faster/city"
@@ -65,6 +66,7 @@ func parseString(value string, tableName string, columnName string) interface{} 
 
 		for k, v := range y {
 			delete(y, k)
+			// TODO optimize this sprintf - make it use fieldString if possible.
 			v = anonymizeValue(v, tableName, fmt.Sprintf("%s.%s", columnName, k))
 			y[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = v
 		}
@@ -107,12 +109,19 @@ func fieldString(table *string, columnPath *string) *[]byte {
 	return &bs
 }
 
+func hashString(s *[]byte) string {
+	return strconv.FormatUint(city.CH64(*s), 10)
+}
+
 // currently only supports strings
 func anonymizeValue(value interface{}, table string, columnPath string) interface{} {
 	if isAnonymizedField(fieldString(&table, &columnPath)) {
 		switch v := value.(type) {
 		case string:
-			return fmt.Sprint(city.CH64([]byte(v)))
+			vp := []byte(v)
+			return hashString(&vp)
+		case []byte:
+			return hashString(&v)
 		}
 	}
 
