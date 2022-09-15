@@ -138,7 +138,7 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
-		} else if batchDuplicatesFilter.TestAndAdd([]byte(insertData.DeduplicationKey)) {
+		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd([]byte(insertData.DeduplicationKey)) {
 			incrementStat(skippedBatchLevelDuplicates)
 		} else {
 			output <- insertData
