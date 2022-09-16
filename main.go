@@ -8,12 +8,12 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
-	"runtime/pprof"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/peterbourgon/ff/v3"
+	"github.com/pkg/profile"
 	boom "github.com/tylertreat/BoomFilters"
 
 	"sync"
@@ -487,7 +487,7 @@ func main() {
 
 	var (
 		forceDump     = fs.Bool("force-dump", false, "Force full data dump and reset stored binlog position")
-		profile       = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
+		runProfile    = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 		startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
 		_             = fs.String("config", "", "config file (optional)")
 	)
@@ -509,20 +509,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	mysqlDbByte = []byte(*mysqlDb)
-
-	if *profile == true {
-		log.Infoln("STARTING IN PROFILING MODE - profile results will be written to cpu.pprof and mem.pprof on shutdown")
-		f, perr := os.Create("cpu.pprof")
-		if perr != nil {
-			log.Fatal(perr)
-		}
-		defer f.Close()
-		err := pprof.StartCPUProfile(f)
-		if err != nil {
-			log.Fatal("could not start profiler: ", err)
-		}
+	var p *profile.Profile
+	if *runProfile {
+		p = profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
 	}
+
+	mysqlDbByte = []byte(*mysqlDb)
 
 	clickhouseDb := establishClickhouseConnection()
 	clickhouseDb.Setup()
@@ -543,20 +535,8 @@ func main() {
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
-		if *profile {
-			pprof.StopCPUProfile()
-			log.Infoln("wrote cpu profile")
-
-			f, err := os.Create("mem.pprof")
-			if err != nil {
-				log.Fatal("could not create memory profile: ", err)
-			}
-			defer f.Close() // error handling omitted for example
-			runtime.GC()    // get up-to-date statistics
-			if err := pprof.WriteHeapProfile(f); err != nil {
-				log.Fatal("could not write memory profile: ", err)
-			}
-			log.Infoln("wrote mem profile")
+		if *runProfile && p != nil {
+			p.Stop()
 		}
 
 		os.Exit(1)
