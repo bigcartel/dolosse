@@ -170,6 +170,8 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	hasPreviousEvent := len(e.Rows) == 2
 
 	newEventIdx := len(e.Rows) - 1
+	// TODO use sync.Pool to re-use slices of row data, or use it higher level and make a sync.Pool of RowInsertData
+	// that has a Reset method.
 	Data := make(RowData, len(e.Rows[newEventIdx]))
 	if hasPreviousEvent {
 		previousRow = e.Rows[0]
