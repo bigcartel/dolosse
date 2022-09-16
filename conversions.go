@@ -140,7 +140,11 @@ func reflectAppend(chColumnType reflect.Type, ary any, val any) (any, error) {
 	var reflectAry reflect.Value
 
 	if ary == nil {
-		reflectAry = reflect.MakeSlice(reflect.SliceOf(chColumnType), 0, 0)
+		// TODO find a way to re-use these slices between runs.
+		// could this use a sync.Pool? Only issue is that different slices have different types,
+		// so I might need to make something custom.
+		// Also - set this slice to be set to the size of this batch instead of max batch size
+		reflectAry = reflect.MakeSlice(reflect.SliceOf(chColumnType), 0, batchSize)
 	} else {
 		reflectAry = reflect.ValueOf(ary)
 	}

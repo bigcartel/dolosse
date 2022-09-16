@@ -163,7 +163,7 @@ func startProcessEventsWorkers() {
 }
 
 // TODO test with all types we care about - yaml conversion, etc.
-// dedupe for yaml columns
+// dedupe for yaml columns according to filtered values?
 func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet) (*RowInsertData, bool) {
 	var previousRow []interface{}
 	tableName := e.Table.Name
@@ -482,7 +482,9 @@ func batchWrite() {
 			lastGtidSet = gtid
 		case e := <-batchWriteChannel:
 			if eventsByTable[e.EventTable] == nil {
-				eventSlice := make([]RowInsertData, 0, batchSize)
+				// saves some memory if a given table doesn't have large batch sizes
+				// - since this slice is re-used any growth that happens only happens once
+				eventSlice := make([]RowInsertData, 0, batchSize / 20)
 				eventsByTable[e.EventTable] = &eventSlice
 			}
 
