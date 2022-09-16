@@ -46,6 +46,7 @@ func updateReplicationDelay(eventTime uint32) {
 func startReplication(gtidSet mysql.GTIDSet) {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:                uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
+		HeartbeatPeriod:         60 * time.Second,
 		Flavor:                  "mysql",
 		Host:                    *mysqlAddr,
 		User:                    *mysqlUser,
