@@ -58,6 +58,7 @@ var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
 var dumping = atomic.Bool{}
 var shouldDump = atomic.Bool{} // TODO set to true if no gtid key is found in clickhouse? that way it always dumps on first run
+var batchSize = 100000
 
 type LookupMap map[string]bool
 
@@ -80,7 +81,14 @@ type RowInsertData struct {
 	Event            RowData
 }
 
-type EventsByTable map[string][]RowInsertData
+type EventsByTable map[string]*[]RowInsertData
+
+func (es *EventsByTable) Reset() {
+	for k, vSlice := range *es {
+		newSlice := (*vSlice)[:0]
+		(*es)[k] = &newSlice
+	}
+}
 
 func syncChColumns(clickhouseDb ClickhouseDb) {
 	conn := establishMysqlConnection()
@@ -98,8 +106,8 @@ func syncChColumns(clickhouseDb ClickhouseDb) {
 
 func printStats() {
 	log.Infoln(*processedRows, "processed rows")
-	log.Infoln(*deliveredRows, "delivered rows")
 	log.Infoln(*enqueuedRows, "enqueued rows")
+	log.Infoln(*deliveredRows, "delivered rows")
 	log.Infoln(*skippedRowLevelDuplicates, "skipped row level duplicate rows")
 	log.Infoln(*skippedBatchLevelDuplicates, "skipped batch level duplicate rows")
 	log.Infoln(*skippedPersistedDuplicates, "skipped persisted duplicate rows")
@@ -246,7 +254,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 
 		wg.Add(1)
 
-		go func(table string, rows []RowInsertData) {
+		go func(table string, rows *[]RowInsertData) {
 			deliverBatchForTable(clickhouseDb, table, rows)
 			wg.Done()
 		}(table, rows)
@@ -263,14 +271,14 @@ func logNoRows(table string) {
 	log.Infoln("no rows to send for", table, "skipping...")
 }
 
-func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows []RowInsertData) {
+func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]RowInsertData) {
 	columns := chColumns.get(table)
 	if columns == nil {
 		log.Infoln("No columns in clickhouse found for", table)
 		return
 	}
 
-	if len(rows) == 0 {
+	if len(*rows) == 0 {
 		logNoRows(table)
 		return
 	}
@@ -293,7 +301,7 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows []RowIns
 	log.Infoln("batch sent for", tableWithDb)
 }
 
-func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows []RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 
 	minMaxValues := getMinMaxValues(processedRows)
 	// TODO also special case any event type "dump" rows found here and check for ids in clickhouse that match.
@@ -320,7 +328,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	batchColumnArrays := make(ClickhouseBatchColumns, len(chColumns))
 	writeCount := 0
 
-	for _, rowInsertData := range processedRows {
+	for _, rowInsertData := range *processedRows {
 		dedupeKey := rowInsertData.DeduplicationKey
 
 		if hasDuplicates && duplicatesMap[dedupeKey] {
@@ -394,13 +402,13 @@ type minMaxValues struct {
 	maxId        int64
 }
 
-func getMinMaxValues(rows []RowInsertData) minMaxValues {
+func getMinMaxValues(rows *[]RowInsertData) minMaxValues {
 	minCreatedAt := time.Time{}
 	maxCreatedAt := time.Time{}
 	var minId int64 = 0
 	var maxId int64 = 0
 
-	for _, r := range rows {
+	for _, r := range *rows {
 		comparingId := reflect.ValueOf(r.Event["id"]).Int()
 
 		// we only care about min and max ids of dump events
@@ -457,10 +465,10 @@ func batchWrite() {
 		}
 
 		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
+		eventsByTable.Reset()
 		printStats()
 		timer = time.NewTimer(10 * time.Second)
-		// TODO how can I pre-allocate the slices in this?
-		eventsByTable = make(EventsByTable)
+		eventsByTable.Reset()
 		counter = 0
 	}
 
@@ -471,9 +479,15 @@ func batchWrite() {
 		case gtid := <-latestProcessingGtid:
 			lastGtidSet = gtid
 		case e := <-batchWriteChannel:
-			eventsByTable[e.EventTable] = append(eventsByTable[e.EventTable], *e)
+			if eventsByTable[e.EventTable] == nil {
+				eventSlice := make([]RowInsertData, 0, batchSize)
+				eventsByTable[e.EventTable] = &eventSlice
+			}
 
-			if counter == 100000 {
+			events := append(*eventsByTable[e.EventTable], *e)
+			eventsByTable[e.EventTable] = &events
+
+			if counter == batchSize {
 				deliver()
 			} else {
 				counter++
