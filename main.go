@@ -39,7 +39,9 @@ type ChColumnSet struct {
 	columnLookup LookupMap
 }
 
-// TODO if columns are stale and we get an error the processed data for the batch would need to be re-processed or we just restart replication from last gtid set? Maybe that's the move - if it fails due to a schema change just restart from a known good point. Fail early and retry Erlang style.
+// TODO if columns are stale and we get an error the processed data for the batch would need to
+// be re-processed or we just restart replication from last gtid set? Maybe that's the move -
+// if it fails due to a schema change just restart from a known good point. Fail early and retry Erlang style.
 var chColumns = NewConcurrentMap[ChColumnSet]()
 
 // The Inverse Bloom Filter may report a false negative but can never report a false positive.
@@ -81,10 +83,27 @@ type RowInsertData struct {
 	Event            RowData
 }
 
-type EventsByTable map[string]*[]RowInsertData
+func (d *RowInsertData) Reset() {
+	for k := range d.Event {
+		delete(d.Event, k)
+	}
+}
+
+var RowInsertDataPool = sync.Pool{
+	New: func() any {
+		insertData := new(RowInsertData)
+		insertData.Event = make(RowData, 20)
+		return insertData
+	},
+}
+
+type EventsByTable map[string]*[]*RowInsertData
 
 func (es *EventsByTable) Reset() {
 	for k, vSlice := range *es {
+		for _, v := range *vSlice {
+			RowInsertDataPool.Put(v)
+		}
 		newSlice := (*vSlice)[:0]
 		(*es)[k] = &newSlice
 	}
@@ -165,14 +184,15 @@ func startProcessEventsWorkers() {
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
 func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet) (*RowInsertData, bool) {
+	insertData := RowInsertDataPool.Get().(*RowInsertData)
+	insertData.Reset()
+
 	var previousRow []interface{}
 	tableName := e.Table.Name
 	hasPreviousEvent := len(e.Rows) == 2
 
 	newEventIdx := len(e.Rows) - 1
-	// TODO use sync.Pool to re-use slices of row data, or use it higher level and make a sync.Pool of RowInsertData
-	// that has a Reset method.
-	Data := make(RowData, len(e.Rows[newEventIdx]))
+
 	if hasPreviousEvent {
 		previousRow = e.Rows[0]
 	}
@@ -194,7 +214,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 			}
 
 			convertedValue := parseValue(row[i], tableName, columnName)
-			Data[c.Name] = convertedValue
+			insertData.Event[c.Name] = convertedValue
 		}
 	}
 
@@ -204,30 +224,29 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 		timestamp = time.Unix(int64(e.Timestamp), 0)
 	}
 
-	Data[eventCreatedAtColumnName] = timestamp
+	insertData.Event[eventCreatedAtColumnName] = timestamp
 
 	if isDuplicate {
-		return &RowInsertData{}, true
+		return insertData, true
 	}
 
-	checksum := checksumMapValues(Data, columns.columns)
-	Data[actionColumnName] = e.Action
+	checksum := checksumMapValues(insertData.Event, columns.columns)
+	insertData.Event[actionColumnName] = e.Action
 
 	var id int64
-	maybeInt := reflect.ValueOf(Data["id"])
+	maybeInt := reflect.ValueOf(insertData.Event["id"])
 	if maybeInt.CanInt() {
-		id = reflect.ValueOf(Data["id"]).Int()
+		id = reflect.ValueOf(insertData.Event["id"]).Int()
 	}
 
-	return &RowInsertData{
-		Id:               id,
-		EventTable:       tableName,
-		EventCreatedAt:   timestamp,
-		EventChecksum:    checksum,
-		EventAction:      e.Action,
-		DeduplicationKey: dupIdString(id, checksum),
-		Event:            Data,
-	}, false
+	insertData.Id = id
+	insertData.EventTable = tableName
+	insertData.EventCreatedAt = timestamp
+	insertData.EventChecksum = checksum
+	insertData.EventAction = e.Action
+	insertData.DeduplicationKey = dupIdString(id, checksum)
+
+	return insertData, false
 }
 
 func OnRow(e *MysqlReplicationRowEvent) {
@@ -256,7 +275,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 
 		wg.Add(1)
 
-		go func(table string, rows *[]RowInsertData) {
+		go func(table string, rows *[]*RowInsertData) {
 			deliverBatchForTable(clickhouseDb, table, rows)
 			wg.Done()
 		}(table, rows)
@@ -273,7 +292,7 @@ func logNoRows(table string) {
 	log.Infoln("no rows to send for", table, "skipping...")
 }
 
-func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]RowInsertData) {
+func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowInsertData) {
 	columns := chColumns.get(table)
 	if columns == nil {
 		log.Infoln("No columns in clickhouse found for", table)
@@ -303,7 +322,7 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]RowIn
 	log.Infoln("batch sent for", tableWithDb)
 }
 
-func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]*RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 
 	minMaxValues := getMinMaxValues(processedRows)
 	// TODO also special case any event type "dump" rows found here and check for ids in clickhouse that match.
@@ -404,7 +423,7 @@ type minMaxValues struct {
 	maxId        int64
 }
 
-func getMinMaxValues(rows *[]RowInsertData) minMaxValues {
+func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 	minCreatedAt := time.Time{}
 	maxCreatedAt := time.Time{}
 	var minId int64 = 0
@@ -470,7 +489,6 @@ func batchWrite() {
 		eventsByTable.Reset()
 		printStats()
 		timer = time.NewTimer(10 * time.Second)
-		eventsByTable.Reset()
 		counter = 0
 	}
 
@@ -484,11 +502,11 @@ func batchWrite() {
 			if eventsByTable[e.EventTable] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
-				eventSlice := make([]RowInsertData, 0, batchSize / 20)
+				eventSlice := make([]*RowInsertData, 0, batchSize/20)
 				eventsByTable[e.EventTable] = &eventSlice
 			}
 
-			events := append(*eventsByTable[e.EventTable], *e)
+			events := append(*eventsByTable[e.EventTable], e)
 			eventsByTable[e.EventTable] = &events
 
 			if counter == batchSize {
