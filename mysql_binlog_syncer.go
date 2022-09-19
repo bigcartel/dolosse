@@ -70,8 +70,6 @@ func startReplication(gtidSet mysql.GTIDSet) {
 		ev, err := streamer.GetEvent(context.Background())
 		checkErr(err)
 
-		// TODO make this an enum so it doesn't allocate a string for every event
-
 		// TODO pass context into here and select on it - if done print last gtid string
 		// This is a partial copy of
 		// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133

@@ -37,7 +37,6 @@ var anonymizeFields = [][]byte{
 	[]byte("longitude"),
 	[]byte("latitude"),
 	[]byte("payment_methods.properties"),
-	[]byte("products.description"),
 }
 
 var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")

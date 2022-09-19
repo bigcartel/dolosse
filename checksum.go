@@ -49,8 +49,10 @@ func checksumMapValues(m map[string]interface{}, columns []ClickhouseQueryColumn
 		}
 	}
 
-	// lop off the trailing comma
-	b.Truncate(b.Len() - 1)
+	if b.Len() > 0 {
+		// lop off the trailing comma
+		b.Truncate(b.Len() - 1)
+	}
 
 	return city.CH64(b.Bytes())
 }

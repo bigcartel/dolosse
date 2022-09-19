@@ -181,9 +181,11 @@ func startProcessEventsWorkers() {
 	}
 }
 
+type IsDuplicate bool
+
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
-func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet) (*RowInsertData, bool) {
+func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet) (*RowInsertData, IsDuplicate) {
 	insertData := RowInsertDataPool.Get().(*RowInsertData)
 	insertData.Reset()
 

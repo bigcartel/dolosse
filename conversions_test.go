@@ -1,10 +1,87 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/go-mysql-org/go-mysql/schema"
 	"gopkg.in/yaml.v3"
 )
+
+func makeRowEvent() *MysqlReplicationRowEvent {
+	replicationRowEvent := &MysqlReplicationRowEvent{}
+	replicationRowEvent.Action = "create"
+	table := schema.Table{Name: "products"}
+	table.Columns = append(table.Columns, schema.TableColumn{Name: "id"})
+	table.Columns = append(table.Columns, schema.TableColumn{Name: "name"})
+	table.Columns = append(table.Columns, schema.TableColumn{Name: "description"})
+	replicationRowEvent.Table = &table
+	rows := make([][]interface{}, 0)
+	rows = append(rows, []interface{}{12, "asdfe", "cool"})
+	rows = append(rows, []interface{}{12, "asdf", "pretty cool"})
+	replicationRowEvent.Rows = rows
+	return replicationRowEvent
+}
+
+func makeColumnSet() *ChColumnSet {
+	return &ChColumnSet{
+		columns: []ClickhouseQueryColumn{
+			{
+				Name: "id",
+				Type: reflect.TypeOf(12),
+			},
+			{
+				Name: "name",
+				Type: reflect.TypeOf(""),
+			},
+			{
+				Name: "description",
+				Type: reflect.TypeOf(""),
+			},
+		},
+		columnLookup: map[string]bool{
+			"id":          true,
+			"name":        true,
+			"description": true,
+		},
+	}
+}
+
+func TestEventToClickhouseRowData(t *testing.T) {
+	columns := makeColumnSet()
+	rowEvent := makeRowEvent()
+
+	insertData, isDuplicate := eventToClickhouseRowData(rowEvent, columns)
+
+	if isDuplicate {
+		t.Error("Expected row not to be flagged as duplicate")
+	}
+
+	if insertData.Id != 12 {
+		t.Errorf("Expected id to be 12, got %d", insertData.Id)
+	}
+
+	if insertData.Event["id"] != 12 {
+		t.Errorf("Expected Event['id'] to be 12, got %d", insertData.Id)
+	}
+
+	if insertData.Event["name"] != "asdf" {
+		t.Errorf("Expected Event['name'] to be asdf, got %s", insertData.Event["name"])
+	}
+
+	if insertData.Event["description"] != "pretty cool" {
+		t.Errorf("Expected Event['description'] to be 'pretty cool', got %s", insertData.Event["description"])
+	}
+}
+
+func BenchmarkEventToClickhouseRowData(b *testing.B) {
+	columns := makeColumnSet()
+	rowEvent := makeRowEvent()
+
+	for n := 0; n < b.N; n++ {
+		eventToClickhouseRowData(rowEvent, columns)
+	}
+}
 
 func TestParseValueUint8Array(t *testing.T) {
 	outValue := "test string"
