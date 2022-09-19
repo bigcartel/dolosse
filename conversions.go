@@ -76,7 +76,6 @@ func parseString(value string, tableName string, columnName string) interface{} 
 	return out
 }
 
-// TODO can this remove the need for similar conversion in the dump code?
 func convertMysqlColumnType(value interface{}, columnType int) interface{} {
 	if value == nil {
 		return value

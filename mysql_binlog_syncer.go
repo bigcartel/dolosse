@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
@@ -63,67 +64,69 @@ func startReplication(gtidSet mysql.GTIDSet) {
 	streamer, err := syncer.StartSyncGTID(gtidSet)
 	checkErr(err)
 
-	conn := establishMysqlConnection()
+	checkErr(withMysqlConnection(func(conn *client.Conn) error {
+		var action string
+		var lastGTIDString string
 
-	var action string
-	var lastGTIDString string
+		for {
+			ev, err := streamer.GetEvent(context.Background())
+			checkErr(err)
 
-	for {
-		ev, err := streamer.GetEvent(context.Background())
-		checkErr(err)
+			// TODO pass context into here and select on it - if done print last gtid string
+			// This is a partial copy of
+			// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133
+			// but simplified so we're not paying the performance overhead for events
+			// we don't care about
+			// the basic idea is to handle rows event, gtid, and xid events and ignore the rest.
+			// maybe if there's a way to detect alter table events it could use that and refresh the given table if it gets one.
+			switch e := ev.Event.(type) {
+			// case *replication.MariadbGTIDEvent:
+			// 	lastGTIDString = e.GTID.String()
+			case *replication.GTIDEvent:
+				u, _ := uuid.FromBytes(e.SID)
+				lastGTIDString = u.String() + ":1-" + strconv.FormatInt(e.GNO, 10)
+			case *replication.QueryEvent:
+				// TODO do a naive check for alter table here
+				// - if an alter table is detected clear the mysql table cache used to decode events
+				// log.Infoln(string(e.Query))
+			case *replication.RowsEvent:
+				if !bytes.Equal(e.Table.Schema, mysqlDbByte) {
+					continue
+				}
 
-		// TODO pass context into here and select on it - if done print last gtid string
-		// This is a partial copy of
-		// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133
-		// but simplified so we're not paying the performance overhead for events
-		// we don't care about
-		// the basic idea is to handle rows event, gtid, and xid events and ignore the rest.
-		// maybe if there's a way to detect alter table events it could use that and refresh the given table if it gets one.
-		switch e := ev.Event.(type) {
-		// case *replication.MariadbGTIDEvent:
-		// 	lastGTIDString = e.GTID.String()
-		case *replication.GTIDEvent:
-			u, _ := uuid.FromBytes(e.SID)
-			lastGTIDString = u.String() + ":1-" + strconv.FormatInt(e.GNO, 10)
-		case *replication.QueryEvent:
-			// TODO do a naive check for alter table here
-			// - if an alter table is detected clear the mysql table cache used to decode events
-			// log.Infoln(string(e.Query))
-		case *replication.RowsEvent:
-			if !bytes.Equal(e.Table.Schema, mysqlDbByte) {
-				continue
+				// TODO make cachedChColumnsForTable support []byte so it doesn't need extra allocations
+				// or is there a faster way to check this to make skipping less expensive?
+				// is this even expensive?
+				_, hasColumns := cachedChColumnsForTable(string(e.Table.Table))
+				if !hasColumns {
+					continue
+				}
+
+				switch ev.Header.EventType {
+				case replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
+					action = InsertAction
+				case replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
+					action = DeleteAction
+				case replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
+					action = UpdateAction
+				}
+
+				table := getMysqlTable(string(e.Table.Schema), string(e.Table.Table))
+
+				rowE := MysqlReplicationRowEvent{
+					Table:     table,
+					Rows:      e.Rows,
+					Action:    action,
+					Timestamp: ev.Header.Timestamp,
+					Gtid:      lastGTIDString,
+				}
+
+				OnRow(&rowE)
 			}
 
-			// TODO make cachedChColumnsForTable support []byte so it doesn't need extra allocations
-			// or is there a faster way to check this to make skipping less expensive?
-			// is this even expensive?
-			_, hasColumns := cachedChColumnsForTable(string(e.Table.Table))
-			if !hasColumns {
-				continue
-			}
-
-			switch ev.Header.EventType {
-			case replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
-				action = InsertAction
-			case replication.DELETE_ROWS_EVENTv1, replication.DELETE_ROWS_EVENTv2:
-				action = DeleteAction
-			case replication.UPDATE_ROWS_EVENTv1, replication.UPDATE_ROWS_EVENTv2:
-				action = UpdateAction
-			}
-
-			table := getMysqlTable(conn, string(e.Table.Schema), string(e.Table.Table))
-
-			rowE := MysqlReplicationRowEvent{
-				Table:     table,
-				Rows:      e.Rows,
-				Action:    action,
-				Timestamp: ev.Header.Timestamp,
-				Gtid:      lastGTIDString,
-			}
-
-			OnRow(&rowE)
+			updateReplicationDelay(ev.Header.Timestamp)
 		}
 
-		updateReplicationDelay(ev.Header.Timestamp)
-	}
+		return nil
+	}))
 }

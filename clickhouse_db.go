@@ -9,7 +9,6 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/siddontang/go-log/log"
 )
@@ -136,7 +135,7 @@ func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end 
 
 func (db ClickhouseDb) Setup() {
 	ctx := context.Background()
-	err := db.conn.Exec(ctx, "create database if not exists mysql_bigcartel_binlog")
+	err := db.conn.Exec(ctx, fmt.Sprintf("create database if not exists %s", *clickhouseDb))
 
 	if err != nil {
 		log.Fatal(err)
@@ -163,8 +162,8 @@ type ChColumnInfo struct {
 
 type ChColumnMap map[string][]ChColumnInfo
 
-func (db ClickhouseDb) ColumnsForMysqlTables(mysqlConn *client.Conn) ChColumnMap {
-	mysqlTables := getMysqlTableNames(mysqlConn)
+func (db ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
+	mysqlTables := getMysqlTableNames()
 	clickhouseTableMap := db.getColumnMap()
 	columnsForTables := make(ChColumnMap, len(mysqlTables))
 
@@ -208,8 +207,8 @@ func (db ClickhouseDb) getColumnMap() ChColumnMap {
 	return columns
 }
 
-func (db ClickhouseDb) CheckSchema(mysqlConn *client.Conn) error {
-	clickhouseColumnsByTable := db.ColumnsForMysqlTables(mysqlConn)
+func (db ClickhouseDb) CheckSchema() error {
+	clickhouseColumnsByTable := db.ColumnsForMysqlTables()
 
 	for table, columns := range clickhouseColumnsByTable {
 		if len(columns) == 0 {

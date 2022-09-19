@@ -32,6 +32,8 @@ var clickhouseDb,
 	mysqlPassword,
 	mysqlDb *string
 
+var forceImmediateDump *bool
+
 var mysqlDbByte []byte
 
 type ChColumnSet struct {
@@ -110,8 +112,7 @@ func (es *EventsByTable) Reset() {
 }
 
 func syncChColumns(clickhouseDb ClickhouseDb) {
-	conn := establishMysqlConnection()
-	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables(conn)
+	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables()
 
 	for table := range existingClickhouseTables {
 		cols, lookup := clickhouseDb.Columns(table)
@@ -327,21 +328,14 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowI
 func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]*RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 
 	minMaxValues := getMinMaxValues(processedRows)
-	// TODO also special case any event type "dump" rows found here and check for ids in clickhouse that match.
-	// if any are found just skip those rows.
-	// if we do it that way, a dump can theoretically be kicked off in parallel with the binlog following.
-	// one question/concern: do we care that this approach means that some records will have their first entry in the db as "update"?
-	// I don't think that matters much.. It's more honest in some ways. Thinking about usage though:
-	// querying for first thing changed after record is created. differentiating between a dump and an insert is actually good for quality of data.
-	// so I think that's fine.
 
 	hasStoredIds := false
 	var storedIdsMap map[int64]bool
 
-	if dumping.Load() {
+	if dumping.Load() && minMaxValues.maxDumpId > 0 {
 		hasStoredIds, storedIdsMap = clickhouseDb.QueryIdRange(tableWithDb,
-			minMaxValues.minId,
-			minMaxValues.maxId)
+			minMaxValues.minDumpId,
+			minMaxValues.maxDumpId)
 	}
 
 	hasDuplicates, duplicatesMap := clickhouseDb.QueryDuplicates(tableWithDb,
@@ -424,29 +418,29 @@ func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchCol
 type minMaxValues struct {
 	minCreatedAt time.Time
 	maxCreatedAt time.Time
-	minId        int64
-	maxId        int64
+	minDumpId    int64
+	maxDumpId    int64
 }
 
 func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 	minCreatedAt := time.Time{}
 	maxCreatedAt := time.Time{}
-	var minId int64 = 0
-	var maxId int64 = 0
+	var minDumpId int64 = 0
+	var maxDumpId int64 = 0
 
 	for _, r := range *rows {
 		// we only care about min and max ids of dump events
 		// this is important since dump is unique in that ids
 		// are sequential
 		if r.EventAction == "dump" {
-			if minId == 0 {
-				minId = r.Id
-			} else if minId > r.Id {
-				minId = r.Id
+			if minDumpId == 0 {
+				minDumpId = r.Id
+			} else if minDumpId > r.Id {
+				minDumpId = r.Id
 			}
 
-			if maxId < r.Id {
-				maxId = r.Id
+			if maxDumpId < r.Id {
+				maxDumpId = r.Id
 			}
 		} else {
 			comparingCreatedAt := r.EventCreatedAt
@@ -466,8 +460,8 @@ func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 	return minMaxValues{
 		minCreatedAt: minCreatedAt,
 		maxCreatedAt: maxCreatedAt,
-		minId:        minId,
-		maxId:        maxId,
+		minDumpId:    minDumpId,
+		maxDumpId:    maxDumpId,
 	}
 }
 
@@ -482,7 +476,7 @@ func batchWrite() {
 	deliver := func() {
 		// Could also get delay by peeking events periodicially to avoid computing it
 		log.Infoln("replication delay is", replicationDelay.Load(), "seconds")
-		if shouldDump.Load() && replicationDelay.Load() < 10 {
+		if shouldDump.Load() && (replicationDelay.Load() < 10 || *forceImmediateDump) {
 			shouldDump.Store(false)
 			go DumpMysqlDb()
 			log.Infoln("Started mysql db dump")
@@ -525,12 +519,13 @@ func main() {
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
 
 	var (
-		forceDump     = fs.Bool("force-dump", false, "Force full data dump and reset stored binlog position")
+		forceDump     = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
 		runProfile    = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 		startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
 		_             = fs.String("config", "", "config file (optional)")
 	)
 
+	forceImmediateDump = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
 	mysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
 	mysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
 	mysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
@@ -557,13 +552,13 @@ func main() {
 
 	clickhouseDb := establishClickhouseConnection()
 	clickhouseDb.Setup()
-	mysqlConn := establishMysqlConnection()
+	initMysqlConnectionPool()
 
 	// TODO validate all clickhouse table columns are compatible with mysql table columns
 	// and that clickhouse tables have event_created_at DateTime, id same_as_mysql, action string
 	// use the clickhouse mysql table function with the credentials provided to this command
 	// to do it using clickhouse translated types for max compat
-	clickhouseDb.CheckSchema(mysqlConn)
+	clickhouseDb.CheckSchema()
 
 	syncChColumns(clickhouseDb)
 
@@ -583,11 +578,9 @@ func main() {
 
 	// TODO how do we determine what should be dumped on a startup?
 	// should it check a clickhouse table config to determine status?
-	minimumStartingGtid := getEarliestGtidStartPoint(mysqlConn)
+	minimumStartingGtid := getEarliestGtidStartPoint()
 
-	// shouldDump.Store(true) // temp to test
-
-	if *forceDump {
+	if *forceDump || *forceImmediateDump {
 		shouldDump.Store(true)
 		clickhouseDb.SetGTIDString(minimumStartingGtid)
 		startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
