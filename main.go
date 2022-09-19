@@ -215,7 +215,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 				isDuplicate = false
 			}
 
-			convertedValue := parseValue(row[i], tableName, columnName)
+			convertedValue := parseValue(row[i], c.Type, tableName, columnName)
 			insertData.Event[c.Name] = convertedValue
 		}
 	}
@@ -415,7 +415,10 @@ func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchCol
 		}
 	}
 
-	checkErr(batch.Send())
+	err = batch.Send()
+	if err != nil {
+		log.Panic(err, tableWithDb)
+	}
 }
 
 type minMaxValues struct {
@@ -432,20 +435,18 @@ func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 	var maxId int64 = 0
 
 	for _, r := range *rows {
-		comparingId := reflect.ValueOf(r.Event["id"]).Int()
-
 		// we only care about min and max ids of dump events
 		// this is important since dump is unique in that ids
 		// are sequential
 		if r.EventAction == "dump" {
 			if minId == 0 {
-				minId = comparingId
-			} else if minId > comparingId {
-				minId = comparingId
+				minId = r.Id
+			} else if minId > r.Id {
+				minId = r.Id
 			}
 
-			if maxId < comparingId {
-				maxId = comparingId
+			if maxId < r.Id {
+				maxId = r.Id
 			}
 		} else {
 			comparingCreatedAt := r.EventCreatedAt
@@ -549,7 +550,7 @@ func main() {
 
 	var p *profile.Profile
 	if *runProfile {
-		p = profile.Start(profile.MemProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
+		p = profile.Start(profile.TraceProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
 	}
 
 	mysqlDbByte = []byte(*mysqlDb)

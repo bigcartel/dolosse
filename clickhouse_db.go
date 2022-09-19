@@ -41,7 +41,7 @@ func establishClickhouseConnection() ClickhouseDb {
 func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 	rows, err := db.conn.Query(context.Background(), q, args...)
 	if err != nil {
-		log.Panicln(err)
+		log.Panicln(err, q, args)
 	}
 
 	rowColumnTypes := rows.ColumnTypes()

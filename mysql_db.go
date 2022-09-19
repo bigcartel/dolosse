@@ -2,12 +2,10 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
 
 	_ "github.com/go-mysql-org/go-mysql/driver"
@@ -78,23 +76,12 @@ type DumpFieldVal interface {
 	Value() interface{}
 }
 
-func parseMysqlDumpField(val DumpFieldVal, mysqlQueryFieldType uint8) interface{} {
+func convertMysqlDumpDatesAndDecimalsToString(val DumpFieldVal, mysqlQueryFieldType uint8) interface{} {
 	switch mysqlQueryFieldType {
-	case mysql.MYSQL_TYPE_DATETIME, mysql.MYSQL_TYPE_TIMESTAMP:
+	case mysql.MYSQL_TYPE_DATETIME, mysql.MYSQL_TYPE_TIMESTAMP, mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
 		vs := string(val.AsString())
 		if len(vs) > 0 {
-			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
-			checkErr(err)
-			return vt
-		} else {
-			return val.Value()
-		}
-	case mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
-		vs := string(val.AsString())
-		if len(vs) > 0 {
-			val, err := decimal.NewFromString(string(val.AsString()))
-			checkErr(err)
-			return val
+			return vs
 		} else {
 			return val.Value()
 		}
@@ -110,7 +97,7 @@ func dumpTable(conn *client.Conn, dbName, tableName string) {
 		values := make([]interface{}, len(row))
 
 		for idx, val := range row {
-			values[idx] = parseMysqlDumpField(&val, result.Fields[idx].Type)
+			values[idx] = convertMysqlDumpDatesAndDecimalsToString(&val, result.Fields[idx].Type)
 		}
 
 		processDumpData(conn, dbName, tableName, values)

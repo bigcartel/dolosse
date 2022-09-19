@@ -39,22 +39,24 @@ func updateReplicationDelay(eventTime uint32) {
 	if now >= eventTime {
 		newDelay = now - eventTime
 	}
-
 	replicationDelay.Store(newDelay)
 }
 
 func startReplication(gtidSet mysql.GTIDSet) {
 	cfg := replication.BinlogSyncerConfig{
-		ServerID:                uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
-		HeartbeatPeriod:         60 * time.Second,
-		Flavor:                  "mysql",
-		Host:                    *mysqlAddr,
-		User:                    *mysqlUser,
-		Password:                *mysqlPassword,
-		UseDecimal:              true,
-		ParseTime:               true,
-		TimestampStringLocation: time.UTC,
+		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
+		HeartbeatPeriod: 60 * time.Second,
+		Flavor:          "mysql",
+		Host:            *mysqlAddr,
+		User:            *mysqlUser,
+		Password:        *mysqlPassword,
+		UseDecimal:      false,
+		ParseTime:       false,
 	}
+
+	// parser := replication.NewBinlogParser()
+	// DONT PARSE TIME OR DECIMAL here since it's single threaded
+	// push that out to the process event workers
 
 	syncer := replication.NewBinlogSyncer(cfg)
 

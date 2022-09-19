@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -9,8 +10,11 @@ import (
 	"time"
 
 	"github.com/go-faster/city"
+	"github.com/go-mysql-org/go-mysql/mysql"
+	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/goccy/go-yaml"
+	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
-	"gopkg.in/yaml.v3"
 )
 
 // could instead be comma separate list of table.column paths provided via CLI.
@@ -28,6 +32,10 @@ var yamlColumns = []string{
 var anonymizeFields = []string{
 	"address",
 	"street",
+	"secret",
+	"postal",
+	"line1",
+	"line2",
 	"password",
 	"salt",
 	"email",
@@ -43,7 +51,8 @@ func parseString(value string, tableName string, columnName string) interface{} 
 
 	if isYamlColumn(tableName, columnName) {
 		y := make(map[string]interface{})
-		err := yaml.Unmarshal([]byte(value), y)
+
+		err := yaml.Unmarshal([]byte(value), &y)
 
 		if err != nil {
 			y["rawYaml"] = value
@@ -58,7 +67,8 @@ func parseString(value string, tableName string, columnName string) interface{} 
 			y[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = v
 		}
 
-		out = y
+		out, err = json.Marshal(y)
+		checkErr(err)
 	} else {
 		out = anonymizeValue(value, tableName, columnName)
 	}
@@ -66,7 +76,47 @@ func parseString(value string, tableName string, columnName string) interface{} 
 	return out
 }
 
-func parseValue(value interface{}, tableName string, columnName string) interface{} {
+// TODO can this remove the need for similar conversion in the dump code?
+func convertMysqlColumnType(value interface{}, columnType int) interface{} {
+	if value == nil {
+		return value
+	}
+	switch columnType {
+	case schema.TYPE_DATETIME, schema.TYPE_TIMESTAMP:
+		vs := fmt.Sprint(value)
+		if len(vs) > 0 {
+			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
+			checkErr(err)
+			return vt
+		} else {
+			return value
+		}
+	case schema.TYPE_DATE:
+		vs := fmt.Sprint(value)
+		if len(vs) > 0 {
+			vt, err := time.Parse("2006-01-02", vs)
+			checkErr(err)
+			return vt
+		} else {
+			return value
+		}
+	case schema.TYPE_DECIMAL:
+		vs := fmt.Sprint(value)
+		if len(vs) > 0 {
+			val, err := decimal.NewFromString(vs)
+			checkErr(err)
+			return val
+		} else {
+			return vs
+		}
+	default:
+		return value
+	}
+}
+
+func parseValue(value interface{}, columnType int, tableName string, columnName string) interface{} {
+	value = convertMysqlColumnType(value, columnType)
+
 	switch v := value.(type) {
 	case []byte:
 		return parseString(string(v), tableName, columnName)
@@ -108,12 +158,26 @@ func hashString(s *[]byte) string {
 
 // currently only supports strings
 func anonymizeValue(value interface{}, table string, columnPath string) interface{} {
-	if isAnonymizedField(fieldString(table, columnPath)) {
-		switch v := value.(type) {
-		case string:
+	anonymize := isAnonymizedField(fieldString(table, columnPath))
+
+	switch v := value.(type) {
+	case map[string]interface{}:
+		for k, subv := range v {
+			delete(v, k)
+			subv = anonymizeValue(subv, table, fmt.Sprintf("%s.%s", columnPath, k))
+			v[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = subv
+		}
+	case []interface{}:
+		for i := range v {
+			v[i] = anonymizeValue(v[i], table, fmt.Sprintf("%s.%s", columnPath, fmt.Sprint(i)))
+		}
+	case string:
+		if anonymize {
 			vp := []byte(v)
 			return hashString(&vp)
-		case []byte:
+		}
+	case []byte:
+		if anonymize {
 			return hashString(&v)
 		}
 	}
@@ -129,6 +193,11 @@ func pointerToValue(value reflect.Value) reflect.Value {
 }
 
 func reflectAppend(chColumnType reflect.Type, ary any, val any) (any, error) {
+	// treat json columns as strings because clickhouse-go's json type conversion isn't perfect
+	if chColumnType.Kind() == reflect.Map {
+		chColumnType = reflect.TypeOf("")
+	}
+
 	var v reflect.Value
 	var reflectAry reflect.Value
 
