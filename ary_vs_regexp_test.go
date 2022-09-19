@@ -7,8 +7,8 @@ import (
 
 func BenchmarkMatchFieldsArray(b *testing.B) {
 	for n := 0; n < b.N; n++ {
-		testString := []byte("my_cool_latitude")
-		isAnonymizedField(&testString)
+		testString := "my_cool_latitude"
+		isAnonymizedField(testString)
 	}
 }
 

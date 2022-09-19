@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"reflect"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-faster/city"
@@ -17,37 +17,26 @@ import (
 // Could also infer and attempt to parse if the destination column is JSON type.
 // TODO either move to config or infer from string text if a config is set to true?
 // Could this also work with json columns/ruby serialized columns in a generic way?
-var yamlColumns = map[string]map[string]bool{
-	"theme_instances": {
-		"settings":          true,
-		"images_sort_order": true,
-	},
-	"order_transactions": {
-		"params": true,
-	},
+// TODO make this the same as anonymizeFields - just a path string
+var yamlColumns = []string{
+	"theme_instances.settings",
+	"theme_instances.image_sort_order",
+	"order_transactions.params",
 }
 
 // TODO make this a configurable arg of comma separated strings
-var anonymizeFields = [][]byte{
-	[]byte("address"),
-	[]byte("street"),
-	[]byte("password"),
-	[]byte("salt"),
-	[]byte("email"),
-	[]byte("longitude"),
-	[]byte("latitude"),
-	[]byte("payment_methods.properties"),
+var anonymizeFields = []string{
+	"address",
+	"street",
+	"password",
+	"salt",
+	"email",
+	"longitude",
+	"latitude",
+	"payment_methods.properties",
 }
 
 var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
-
-func isYamlColumn(tableName string, columnName string) bool {
-	if v, ok := yamlColumns[tableName]; ok {
-		return v[columnName]
-	} else {
-		return false
-	}
-}
 
 func parseString(value string, tableName string, columnName string) interface{} {
 	var out interface{}
@@ -65,7 +54,6 @@ func parseString(value string, tableName string, columnName string) interface{} 
 
 		for k, v := range y {
 			delete(y, k)
-			// TODO optimize this sprintf - make it use fieldString if possible.
 			v = anonymizeValue(v, tableName, fmt.Sprintf("%s.%s", columnName, k))
 			y[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = v
 		}
@@ -89,9 +77,9 @@ func parseValue(value interface{}, tableName string, columnName string) interfac
 	}
 }
 
-func isAnonymizedField(s *[]byte) bool {
-	for i := range anonymizeFields {
-		if bytes.Contains(*s, anonymizeFields[i]) {
+func stringInSlice(s string, slice []string) bool {
+	for i := range slice {
+		if strings.Contains(s, slice[i]) {
 			return true
 		}
 	}
@@ -99,13 +87,19 @@ func isAnonymizedField(s *[]byte) bool {
 	return false
 }
 
-func fieldString(table *string, columnPath *string) *[]byte {
-	bs := make([]byte, len(*table)+len(*columnPath)+1)
-	l := 0
-	l += copy(bs[l:], *table)
-	l += copy(bs[l:], ".")
-	copy(bs[l:], *columnPath)
-	return &bs
+func isAnonymizedField(s string) bool {
+	return stringInSlice(s, anonymizeFields)
+}
+
+func isYamlColumn(tableName string, columnName string) bool {
+	return stringInSlice(fmt.Sprintf("%s.%s", tableName, columnName), yamlColumns)
+}
+
+func fieldString(table string, columnPath string) string {
+	b := strings.Builder{}
+	b.WriteString(table)
+	b.WriteString(columnPath)
+	return b.String()
 }
 
 func hashString(s *[]byte) string {
@@ -114,7 +108,7 @@ func hashString(s *[]byte) string {
 
 // currently only supports strings
 func anonymizeValue(value interface{}, table string, columnPath string) interface{} {
-	if isAnonymizedField(fieldString(&table, &columnPath)) {
+	if isAnonymizedField(fieldString(table, columnPath)) {
 		switch v := value.(type) {
 		case string:
 			vp := []byte(v)
