@@ -112,7 +112,9 @@ type DumpFieldVal interface {
 	Value() interface{}
 }
 
-func convertMysqlDumpDatesAndDecimalsToString(val *mysql.FieldValue) interface{} {
+// We copy these because each val passed in is using a shared and re-used buffer
+// so data will become corrupted if we don't copy.
+func copyDumpStringValues(val *mysql.FieldValue) interface{} {
 	switch val.Type {
 	case mysql.FieldValueTypeString:
 		return string(val.AsString())
@@ -129,7 +131,7 @@ func dumpTable(dbName, tableName string) {
 			values := make([]interface{}, len(row))
 
 			for idx, val := range row {
-				values[idx] = convertMysqlDumpDatesAndDecimalsToString(&val)
+				values[idx] = copyDumpStringValues(&val)
 			}
 
 			processDumpData(dbName, tableName, values)
