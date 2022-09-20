@@ -84,20 +84,10 @@ func DumpMysqlDb() {
 	dumping.Store(false)
 }
 
-type DumpFieldVal interface {
-	AsString() []byte
-	Value() interface{}
-}
-
-func convertMysqlDumpDatesAndDecimalsToString(val DumpFieldVal, mysqlQueryFieldType uint8) interface{} {
-	switch mysqlQueryFieldType {
-	case mysql.MYSQL_TYPE_STRING, mysql.MYSQL_TYPE_DATETIME, mysql.MYSQL_TYPE_TIMESTAMP, mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
-		vs := string(val.AsString())
-		if len(vs) > 0 {
-			return vs
-		} else {
-			return val.Value()
-		}
+func convertMysqlDumpDatesAndDecimalsToString(val *mysql.FieldValue, mysqlQueryFieldType uint8) interface{} {
+	switch val.Type {
+	case mysql.FieldValueTypeString:
+		return string(val.AsString())
 	default:
 		return val.Value()
 	}
