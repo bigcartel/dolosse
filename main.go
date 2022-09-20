@@ -34,8 +34,8 @@ var clickhouseDb,
 
 var batchWriteInterval *time.Duration
 
-var forceImmediateDump,
-	forceDump,
+var DumpImmediately,
+	Dump,
 	rewind,
 	runProfile *bool
 
@@ -494,7 +494,7 @@ func batchWrite() {
 	deliver := func() {
 		// Could also get delay by peeking events periodicially to avoid computing it
 		log.Infoln("replication delay is", replicationDelay.Load(), "seconds")
-		if shouldDump.Load() && (replicationDelay.Load() < 10 || *forceImmediateDump) {
+		if shouldDump.Load() && (replicationDelay.Load() < 10 || *DumpImmediately) {
 			shouldDump.Store(false)
 			go DumpMysqlDb()
 			log.Infoln("Started mysql db dump")
@@ -546,11 +546,11 @@ func parseFlags(args []string) {
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
 
 	var _ = fs.String("config", "", "config file (optional)")
-	forceDump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
+	Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
 	rewind = fs.Bool("rewind", false, "Reset stored binlog position and start replication from earliest available binlog event")
 	runProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 	startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
-	forceImmediateDump = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
+	DumpImmediately = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
 	mysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
 	mysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
 	mysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
@@ -596,11 +596,11 @@ func startSync() {
 	// should it check a clickhouse table config to determine status?
 	minimumStartingGtid := getEarliestGtidStartPoint()
 
-	if *forceDump || *forceImmediateDump {
+	if *Dump || *DumpImmediately {
 		shouldDump.Store(true)
 	}
 
-	if *forceDump || *forceImmediateDump || *rewind {
+	if *Dump || *DumpImmediately || *rewind {
 		clickhouseDb.SetGTIDString(minimumStartingGtid)
 		startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
 	} else {
