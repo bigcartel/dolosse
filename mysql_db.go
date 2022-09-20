@@ -13,19 +13,28 @@ import (
 	_ "github.com/go-mysql-org/go-mysql/driver"
 )
 
+var mysqlPoolInitialized = false
 var mysqlPool *client.Pool
 var mysqlColumns = NewConcurrentMap[*schema.Table]()
 
 func getEarliestGtidStartPoint() string {
 	return withMysqlConnection(func(conn *client.Conn) string {
-		rr, err := conn.Execute("select @@GLOBAL.gtid_purged;")
+		gtidString := getMysqlVariable(conn, "@@GLOBAL.gtid_purged")
 
-		if err != nil {
-			log.Fatal(err)
+		if len(gtidString) == 0 {
+			serverUuid := getMysqlVariable(conn, "@@GLOBAL.server_uuid")
+			gtidString = serverUuid + ":1"
 		}
 
-		return string(rr.Values[0][0].AsString())
+		return gtidString
 	})
+}
+
+func getMysqlVariable(conn *client.Conn, variable string) string {
+	rr, err := conn.Execute("select " + variable)
+	checkErr(err)
+
+	return string(rr.Values[0][0].AsString())
 }
 
 func getMysqlTableNames() []string {
@@ -63,7 +72,10 @@ func getMysqlTable(db, table string) *schema.Table {
 }
 
 func initMysqlConnectionPool() {
-	mysqlPool = client.NewPool(log.Debugf, 10, 20, 5, *mysqlAddr, *mysqlUser, *mysqlPassword, *mysqlDb)
+	if !mysqlPoolInitialized {
+		mysqlPool = client.NewPool(log.Debugf, 10, 20, 5, *mysqlAddr, *mysqlUser, *mysqlPassword, *mysqlDb)
+		mysqlPoolInitialized = true
+	}
 }
 
 func withMysqlConnection[T any](f func(c *client.Conn) T) T {

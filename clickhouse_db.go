@@ -20,7 +20,7 @@ type ClickhouseDb struct {
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const actionColumnName = "changelog_action"
 
-func establishClickhouseConnection() ClickhouseDb {
+func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
 		Addr:        []string{*clickhouseAddr},
 		Compression: &clickhouse.Compression{Method: clickhouse.CompressionLZ4, Level: 1},
@@ -30,11 +30,9 @@ func establishClickhouseConnection() ClickhouseDb {
 		},
 	})
 
-	checkErr(err)
-
 	return ClickhouseDb{
 		conn: clickhouseConn,
-	}
+	}, err
 }
 
 func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
@@ -297,7 +295,7 @@ func (db ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 
 	err := db.conn.Select(context.Background(),
 		&rows,
-		"select value from mysql_bigcartel_binlog.binlog_sync_state where key = $1",
+		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *clickhouseDb),
 		gtidSetKey)
 
 	if err != nil {
@@ -321,7 +319,7 @@ func (db ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 
 func (db ClickhouseDb) SetGTIDString(s string) {
 	err := db.conn.Exec(context.Background(),
-		"insert into mysql_bigcartel_binlog.binlog_sync_state (key, value) values ($1, $2)",
+		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", *clickhouseDb),
 		gtidSetKey,
 		s)
 

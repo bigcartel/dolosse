@@ -126,7 +126,5 @@ func startReplication(gtidSet mysql.GTIDSet) {
 
 			updateReplicationDelay(ev.Header.Timestamp)
 		}
-
-		return nil
 	}))
 }
