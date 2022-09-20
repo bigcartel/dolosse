@@ -49,9 +49,11 @@ var chColumns = NewConcurrentMap[ChColumnSet]()
 // The Inverse Bloom Filter may report a false negative but can never report a false positive.
 // behaves a bit like a fixed size hash map that doesn't handle conflicts
 var batchDuplicatesFilter = boom.NewInverseBloomFilter(1000000)
-
-var processRowsChannel = make(chan *MysqlReplicationRowEvent, 10000)
-var batchWriteChannel = make(chan *RowInsertData, 10000)
+var batchSize = 100000
+var concurrentBatchWrites = 10
+var concurrentMysqlDumpSelects = 10
+var processRowsChannel = make(chan *MysqlReplicationRowEvent, batchSize)
+var batchWriteChannel = make(chan *RowInsertData, batchSize)
 var latestProcessingGtid = make(chan string)
 var deliveredRows = new(uint64)
 var enqueuedRows = new(uint64)
@@ -62,7 +64,6 @@ var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
 var dumping = atomic.Bool{}
 var shouldDump = atomic.Bool{} // TODO set to true if no gtid key is found in clickhouse? that way it always dumps on first run
-var batchSize = 100000
 
 type LookupMap map[string]bool
 
@@ -269,6 +270,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 	syncChColumns(clickhouseDb)
 
 	var wg sync.WaitGroup
+	working := make(chan bool, concurrentBatchWrites)
 
 	for table, rows := range eventsByTable {
 		_, hasColumns := cachedChColumnsForTable(table)
@@ -279,7 +281,9 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 		wg.Add(1)
 
 		go func(table string, rows *[]*RowInsertData) {
+			working <- true
 			deliverBatchForTable(clickhouseDb, table, rows)
+			<-working
 			wg.Done()
 		}(table, rows)
 	}

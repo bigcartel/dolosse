@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -76,15 +77,30 @@ func withMysqlConnection[T any](f func(c *client.Conn) T) T {
 func DumpMysqlDb() {
 	dumping.Store(true)
 
+	var wg sync.WaitGroup
+	working := make(chan bool, concurrentMysqlDumpSelects)
+
 	// TODO paralellize with either worker or waitgroup pattern.
 	for table := range *chColumns.m {
-		dumpTable(*mysqlDb, table)
+		wg.Add(1)
+		go func(t string) {
+			working <- true
+			dumpTable(*mysqlDb, t)
+			wg.Done()
+		}(table)
 	}
+
+	wg.Wait()
 
 	dumping.Store(false)
 }
 
-func convertMysqlDumpDatesAndDecimalsToString(val *mysql.FieldValue, mysqlQueryFieldType uint8) interface{} {
+type DumpFieldVal interface {
+	AsString() []byte
+	Value() interface{}
+}
+
+func convertMysqlDumpDatesAndDecimalsToString(val *mysql.FieldValue) interface{} {
 	switch val.Type {
 	case mysql.FieldValueTypeString:
 		return string(val.AsString())
@@ -101,7 +117,7 @@ func dumpTable(dbName, tableName string) {
 			values := make([]interface{}, len(row))
 
 			for idx, val := range row {
-				values[idx] = convertMysqlDumpDatesAndDecimalsToString(&val, result.Fields[idx].Type)
+				values[idx] = convertMysqlDumpDatesAndDecimalsToString(&val)
 			}
 
 			processDumpData(dbName, tableName, values)
