@@ -14,7 +14,6 @@ import (
 
 	"github.com/peterbourgon/ff/v3"
 	"github.com/pkg/profile"
-	boom "github.com/tylertreat/BoomFilters"
 
 	"sync"
 
@@ -46,9 +45,6 @@ type ChColumnSet struct {
 // if it fails due to a schema change just restart from a known good point. Fail early and retry Erlang style.
 var chColumns = NewConcurrentMap[ChColumnSet]()
 
-// The Inverse Bloom Filter may report a false negative but can never report a false positive.
-// behaves a bit like a fixed size hash map that doesn't handle conflicts
-var batchDuplicatesFilter = boom.NewInverseBloomFilter(1000000)
 var batchSize = 100000
 var concurrentBatchWrites = 10
 var concurrentMysqlDumpSelects = 10
@@ -59,7 +55,7 @@ var deliveredRows = new(uint64)
 var enqueuedRows = new(uint64)
 var processedRows = new(uint64)
 var skippedRowLevelDuplicates = new(uint64)
-var skippedBatchLevelDuplicates = new(uint64)
+var skippedLocallyFilterDuplicates = new(uint64)
 var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
 var dumping = atomic.Bool{}
@@ -88,6 +84,8 @@ type RowInsertData struct {
 
 func (d *RowInsertData) Reset() {
 	for k := range d.Event {
+		// deleting values doesn't free the memory for the map,
+		// so it can be re-used on the next run without needing more allocations
 		delete(d.Event, k)
 	}
 }
@@ -130,7 +128,7 @@ func printStats() {
 	log.Infoln(*enqueuedRows, "enqueued rows")
 	log.Infoln(*deliveredRows, "delivered rows")
 	log.Infoln(*skippedRowLevelDuplicates, "skipped row level duplicate rows")
-	log.Infoln(*skippedBatchLevelDuplicates, "skipped batch level duplicate rows")
+	log.Infoln(*skippedLocallyFilterDuplicates, "skipped locally filtered duplicate rows")
 	log.Infoln(*skippedPersistedDuplicates, "skipped persisted duplicate rows")
 	log.Infoln(*skippedDumpDuplicates, "skipped dump duplicate rows")
 }
@@ -168,7 +166,7 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
 		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd([]byte(insertData.DeduplicationKey)) {
-			incrementStat(skippedBatchLevelDuplicates)
+			incrementStat(skippedLocallyFilterDuplicates)
 		} else {
 			output <- insertData
 		}
@@ -293,6 +291,8 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 	if lastGtidSet != "" {
 		clickhouseDb.SetGTIDString(lastGtidSet)
 	}
+
+	writeBloomFilterState()
 }
 
 func logNoRows(table string) {
@@ -554,6 +554,7 @@ func main() {
 
 	mysqlDbByte = []byte(*mysqlDb)
 
+	readBloomFilterState()
 	clickhouseDb := establishClickhouseConnection()
 	clickhouseDb.Setup()
 	initMysqlConnectionPool()
