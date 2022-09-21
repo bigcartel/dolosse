@@ -14,6 +14,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3"
 	"github.com/pkg/profile"
+	"golang.org/x/exp/maps"
 
 	"sync"
 
@@ -51,9 +52,10 @@ type ChColumnSet struct {
 // if it fails due to a schema change just restart from a known good point. Fail early and retry Erlang style.
 var chColumns = NewConcurrentMap[ChColumnSet]()
 
-var batchSize = 100000
-var concurrentBatchWrites = 10
-var concurrentMysqlDumpSelects = 10
+const batchSize = 100000
+const concurrentBatchWrites = 10
+const concurrentMysqlDumpSelects = 10
+
 var processRowsChannel = make(chan *MysqlReplicationRowEvent, batchSize)
 var batchWriteChannel = make(chan *RowInsertData, batchSize)
 var latestProcessingGtid = make(chan string)
@@ -89,11 +91,7 @@ type RowInsertData struct {
 }
 
 func (d *RowInsertData) Reset() {
-	for k := range d.Event {
-		// deleting values doesn't free the memory for the map,
-		// so it can be re-used on the next run without needing more allocations
-		delete(d.Event, k)
-	}
+	maps.Clear(d.Event)
 }
 
 var RowInsertDataPool = sync.Pool{
@@ -226,10 +224,13 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 		}
 	}
 
-	// make this use updated_at if it exists on the row?
-	timestamp := time.Now()
+	var timestamp time.Time
 	if e.Timestamp > 0 {
-		timestamp = time.Unix(int64(e.Timestamp), 0)
+		timestamp = time.
+			Unix(int64(e.Timestamp), 0).
+			Add(time.Duration(e.SubsecondSequence%1000000000) * time.Nanosecond)
+	} else {
+		timestamp = time.Now()
 	}
 
 	insertData.Event[eventCreatedAtColumnName] = timestamp
@@ -239,6 +240,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	}
 
 	checksum := checksumMapValues(insertData.Event, columns.columns)
+	insertData.Event[hashColumnName] = checksum
 	insertData.Event[actionColumnName] = e.Action
 
 	var id int64
@@ -615,7 +617,6 @@ func startSync() {
 func main() {
 	parseFlags(os.Args[1:])
 
-	// TODO this presents a problem for tests
 	readBloomFilterState()
 
 	var p *profile.Profile

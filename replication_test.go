@@ -113,8 +113,9 @@ func TestBasicReplication(t *testing.T) {
 				price Decimal(10, 2),
 				description Nullable(String),
 				created_at DateTime,
+				changelog_hash UInt64,
 				changelog_action LowCardinality(String),
-				changelog_event_created_at DateTime
+				changelog_event_created_at DateTime64(9)
 			)
 		  ENGINE = MergeTree
 			ORDER BY (id)
@@ -122,7 +123,7 @@ func TestBasicReplication(t *testing.T) {
 
 		go startSync()
 
-		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at", 2)
+		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 2)
 
 		if len(r) > 2 {
 			t.Fatal("Expected 2 replicated rows, got ", len(r), " ", r)

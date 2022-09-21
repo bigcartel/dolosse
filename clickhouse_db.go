@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ type ClickhouseDb struct {
 
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const actionColumnName = "changelog_action"
+const hashColumnName = "changelog_hash"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
@@ -104,21 +106,14 @@ func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end 
 	queryString := fmt.Sprintf(`
 		SELECT
 		id,
-		cityHash64(
-			arrayStringConcat(
-				arrayFilter(
-					x -> isNotNull(x),
-					array(* except(%s) apply toString)
-				)
-			, ',')
-		) as checksum
+		%s
 		FROM %s where %s >= $1 and %s <= $2`,
-		actionColumnName,
+		hashColumnName,
 		tableWithDb,
 		eventCreatedAtColumnName,
 		eventCreatedAtColumnName)
 
-	duplicates := db.Query(queryString, start, end)
+	duplicates := db.Query(queryString, start.Add(-1*time.Second), end.Add(1*time.Second))
 
 	duplicatesMap := make(map[string]bool)
 
@@ -208,39 +203,59 @@ func (db ClickhouseDb) getColumnMap() ChColumnMap {
 func (db ClickhouseDb) CheckSchema() error {
 	clickhouseColumnsByTable := db.ColumnsForMysqlTables()
 
+	invalidTableMessages := make([]string, 0, len(clickhouseColumnsByTable))
+
 	for table, columns := range clickhouseColumnsByTable {
 		if len(columns) == 0 {
 			continue
 		}
 
-		hasEventCreatedAt := false
-		hasAction := false
+		requiredCreatedAtType := "DateTime64(9)"
+		requiredActionType := "LowCardinality(String)"
+		requiredHashType := "UInt64"
+		validEventCreatedAt := false
+		validAction := false
+		validHash := false
+
 		for _, column := range columns {
 			switch column.Name {
 			case eventCreatedAtColumnName:
-				hasEventCreatedAt = true
+				validEventCreatedAt = column.Type == requiredCreatedAtType
 			case actionColumnName:
-				hasAction = true
+				validAction = column.Type == requiredActionType
+			case hashColumnName:
+				validHash = column.Type == requiredHashType
 			}
 		}
 
-		if !hasEventCreatedAt || !hasAction {
-			baseError := fmt.Sprintf("Clickhouse destination table %s is missing columns",
+		if !validEventCreatedAt || !validAction || !validHash {
+			baseError := fmt.Sprintf("Clickhouse destination table %s requires columns",
 				table)
 
 			columnStrings := make([]string, 0)
 
-			if !hasEventCreatedAt {
+			if !validEventCreatedAt {
 				columnStrings = append(columnStrings,
-					fmt.Sprintf("%s DateTime", eventCreatedAtColumnName))
+					fmt.Sprintf("%s %s", eventCreatedAtColumnName, requiredCreatedAtType))
 			}
-			if !hasAction {
+			if !validAction {
 				columnStrings = append(columnStrings,
-					fmt.Sprintf("%s LowCardinality(string)", actionColumnName))
+					fmt.Sprintf("%s %s", actionColumnName, requiredActionType))
+			}
+			if !validHash {
+				columnStrings = append(columnStrings,
+					fmt.Sprintf("%s %s", hashColumnName, requiredHashType))
 			}
 
-			log.Panicf("%s %s", baseError, strings.Join(columnStrings, ", "))
+			invalidTableMessages = append(invalidTableMessages, fmt.Sprintf("%s %s", baseError, strings.Join(columnStrings, ", ")))
 		}
+	}
+
+	if len(invalidTableMessages) > 0 {
+		for i := range invalidTableMessages {
+			log.Errorln(invalidTableMessages[i])
+		}
+		os.Exit(0)
 	}
 
 	return nil

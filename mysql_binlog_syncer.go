@@ -13,14 +13,16 @@ import (
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/google/uuid"
+	"golang.org/x/exp/maps"
 )
 
 type MysqlReplicationRowEvent struct {
-	Table     *schema.Table
-	Rows      [][]interface{}
-	Action    string
-	Timestamp uint32
-	Gtid      string
+	Table             *schema.Table
+	Rows              [][]interface{}
+	Action            string
+	Timestamp         uint32
+	SubsecondSequence uint32
+	Gtid              string
 }
 
 // TODO replace all these events with enum types that are uint8 underneath
@@ -67,10 +69,17 @@ func startReplication(gtidSet mysql.GTIDSet) {
 	checkErr(withMysqlConnection(func(conn *client.Conn) error {
 		var action string
 		var lastGTIDString string
+		perSecondEventCounts := make(map[uint64]uint32, 100)
+		var currentEventTimestamp uint32 = 0
 
 		for {
 			ev, err := streamer.GetEvent(context.Background())
 			checkErr(err)
+
+			if ev.Header.Timestamp != currentEventTimestamp {
+				currentEventTimestamp = ev.Header.Timestamp
+				maps.Clear(perSecondEventCounts)
+			}
 
 			// TODO pass context into here and select on it - if done print last gtid string
 			// This is a partial copy of
@@ -114,14 +123,17 @@ func startReplication(gtidSet mysql.GTIDSet) {
 				table := getMysqlTable(string(e.Table.Schema), string(e.Table.Table))
 
 				rowE := MysqlReplicationRowEvent{
-					Table:     table,
-					Rows:      e.Rows,
-					Action:    action,
-					Timestamp: ev.Header.Timestamp,
-					Gtid:      lastGTIDString,
+					Table:             table,
+					Rows:              e.Rows,
+					Action:            action,
+					Timestamp:         ev.Header.Timestamp,
+					SubsecondSequence: perSecondEventCounts[e.TableID],
+					Gtid:              lastGTIDString,
 				}
 
 				OnRow(&rowE)
+
+				perSecondEventCounts[e.TableID]++
 			}
 
 			updateReplicationDelay(ev.Header.Timestamp)
