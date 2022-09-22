@@ -45,6 +45,30 @@ func updateReplicationDelay(eventTime uint32) {
 	replicationDelay.Store(newDelay)
 }
 
+type PerSecondEventCountMap = map[uint64]uint32
+
+const eventCountMemory = 60
+
+func rotateEventCounts(counts *[]PerSecondEventCountMap, currentTimestamp, newestTimestamp uint32) {
+	rotateWindowBy := int(currentTimestamp - newestTimestamp)
+
+	if rotateWindowBy > eventCountMemory {
+		rotateWindowBy = eventCountMemory
+	}
+
+	recycle, truncated := (*counts)[0:rotateWindowBy], (*counts)[rotateWindowBy:]
+	*counts = truncated
+	for _, m := range recycle {
+		if m != nil {
+			maps.Clear(m)
+		} else {
+			m = make(PerSecondEventCountMap, 100)
+		}
+
+		*counts = append(*counts, m)
+	}
+}
+
 func startReplication(gtidSet mysql.GTIDSet) {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
@@ -69,17 +93,12 @@ func startReplication(gtidSet mysql.GTIDSet) {
 	checkErr(withMysqlConnection(func(conn *client.Conn) error {
 		var action string
 		var lastGTIDString string
-		perSecondEventCounts := make(map[uint64]uint32, 100)
-		var currentEventTimestamp uint32 = 0
+		perSecondEventCounts := make([]PerSecondEventCountMap, eventCountMemory)
+		var newestTimestampEncountered uint32 = 0
 
 		for {
 			ev, err := streamer.GetEvent(context.Background())
 			checkErr(err)
-
-			if ev.Header.Timestamp != currentEventTimestamp {
-				currentEventTimestamp = ev.Header.Timestamp
-				maps.Clear(perSecondEventCounts)
-			}
 
 			// TODO pass context into here and select on it - if done print last gtid string
 			// This is a partial copy of
@@ -111,6 +130,13 @@ func startReplication(gtidSet mysql.GTIDSet) {
 					continue
 				}
 
+				if ev.Header.Timestamp > newestTimestampEncountered {
+					rotateEventCounts(&perSecondEventCounts, ev.Header.Timestamp, newestTimestampEncountered)
+					newestTimestampEncountered = ev.Header.Timestamp
+				}
+
+				counterLookupOffset := eventCountMemory - (newestTimestampEncountered - ev.Header.Timestamp) - 1
+
 				switch ev.Header.EventType {
 				case replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
 					action = InsertAction
@@ -127,13 +153,13 @@ func startReplication(gtidSet mysql.GTIDSet) {
 					Rows:              e.Rows,
 					Action:            action,
 					Timestamp:         ev.Header.Timestamp,
-					SubsecondSequence: perSecondEventCounts[e.TableID],
+					SubsecondSequence: perSecondEventCounts[counterLookupOffset][e.TableID],
 					Gtid:              lastGTIDString,
 				}
 
 				OnRow(&rowE)
 
-				perSecondEventCounts[e.TableID]++
+				perSecondEventCounts[counterLookupOffset][e.TableID]++
 			}
 
 			updateReplicationDelay(ev.Header.Timestamp)
