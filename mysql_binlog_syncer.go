@@ -13,16 +13,21 @@ import (
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/google/uuid"
-	"golang.org/x/exp/maps"
+	"github.com/siddontang/go-log/log"
 )
 
 type MysqlReplicationRowEvent struct {
-	Table             *schema.Table
-	Rows              [][]interface{}
-	Action            string
-	Timestamp         uint32
-	SubsecondSequence uint32
-	Gtid              string
+	Table          *schema.Table
+	Rows           [][]interface{}
+	Action         string
+	Timestamp      time.Time
+	ServerId       string
+	GtidEventCount uint32
+	Gtid           int64
+}
+
+func (e *MysqlReplicationRowEvent) EventId() string {
+	return e.ServerId + ":" + strconv.FormatInt(e.Gtid, 10) + "#" + strconv.FormatUint(uint64(e.GtidEventCount), 10)
 }
 
 // TODO replace all these events with enum types that are uint8 underneath
@@ -47,28 +52,6 @@ func updateReplicationDelay(eventTime uint32) {
 
 type PerSecondEventCountMap = map[uint64]uint32
 
-const eventCountMemory = 60
-
-func rotateEventCounts(counts *[]PerSecondEventCountMap, currentTimestamp, newestTimestamp uint32) {
-	rotateWindowBy := int(currentTimestamp - newestTimestamp)
-
-	if rotateWindowBy > eventCountMemory {
-		rotateWindowBy = eventCountMemory
-	}
-
-	recycle, truncated := (*counts)[0:rotateWindowBy], (*counts)[rotateWindowBy:]
-	*counts = truncated
-	for _, m := range recycle {
-		if m != nil {
-			maps.Clear(m)
-		} else {
-			m = make(PerSecondEventCountMap, 100)
-		}
-
-		*counts = append(*counts, m)
-	}
-}
-
 func startReplication(gtidSet mysql.GTIDSet) {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
@@ -81,9 +64,8 @@ func startReplication(gtidSet mysql.GTIDSet) {
 		ParseTime:       false,
 	}
 
+	// TODO experiment with raw mode and instantiating parser to only parse events of interest
 	// parser := replication.NewBinlogParser()
-	// DONT PARSE TIME OR DECIMAL here since it's single threaded
-	// push that out to the process event workers
 
 	syncer := replication.NewBinlogSyncer(cfg)
 
@@ -92,15 +74,16 @@ func startReplication(gtidSet mysql.GTIDSet) {
 
 	checkErr(withMysqlConnection(func(conn *client.Conn) error {
 		var action string
-		var lastGTIDString string
-		perSecondEventCounts := make([]PerSecondEventCountMap, eventCountMemory)
-		var newestTimestampEncountered uint32 = 0
+		var serverUuid string
+		var gtidEventCount uint32
+		var eventGtid int64
+		var rawEventSid []byte
+		var txnCommitTime time.Time
 
 		for {
 			ev, err := streamer.GetEvent(context.Background())
 			checkErr(err)
 
-			// TODO pass context into here and select on it - if done print last gtid string
 			// This is a partial copy of
 			// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133
 			// but simplified so we're not paying the performance overhead for events
@@ -108,11 +91,22 @@ func startReplication(gtidSet mysql.GTIDSet) {
 			// the basic idea is to handle rows event, gtid, and xid events and ignore the rest.
 			// maybe if there's a way to detect alter table events it could use that and refresh the given table if it gets one.
 			switch e := ev.Event.(type) {
+			// TODO add testing and support for mariadb
 			// case *replication.MariadbGTIDEvent:
 			// 	lastGTIDString = e.GTID.String()
 			case *replication.GTIDEvent:
-				u, _ := uuid.FromBytes(e.SID)
-				lastGTIDString = u.String() + ":1-" + strconv.FormatInt(e.GNO, 10)
+				txnCommitTime = e.OriginalCommitTime()
+				eventGtid = e.GNO
+				gtidEventCount = 0
+
+				if !bytes.Equal(e.SID, rawEventSid) {
+					rawEventSid = e.SID
+					sid, err := uuid.FromBytes(rawEventSid)
+					if err != nil {
+						log.Panicln("failed parsing GTID event server UUID ", err)
+					}
+					serverUuid = sid.String()
+				}
 			case *replication.QueryEvent:
 				// TODO do a naive check for alter table here
 				// - if an alter table is detected clear the mysql table cache used to decode events
@@ -130,13 +124,6 @@ func startReplication(gtidSet mysql.GTIDSet) {
 					continue
 				}
 
-				if ev.Header.Timestamp > newestTimestampEncountered {
-					rotateEventCounts(&perSecondEventCounts, ev.Header.Timestamp, newestTimestampEncountered)
-					newestTimestampEncountered = ev.Header.Timestamp
-				}
-
-				counterLookupOffset := eventCountMemory - (newestTimestampEncountered - ev.Header.Timestamp) - 1
-
 				switch ev.Header.EventType {
 				case replication.WRITE_ROWS_EVENTv1, replication.WRITE_ROWS_EVENTv2:
 					action = InsertAction
@@ -146,20 +133,21 @@ func startReplication(gtidSet mysql.GTIDSet) {
 					action = UpdateAction
 				}
 
+				// TODO use event table info so columns match up for events pre-schema changes
 				table := getMysqlTable(string(e.Table.Schema), string(e.Table.Table))
 
 				rowE := MysqlReplicationRowEvent{
-					Table:             table,
-					Rows:              e.Rows,
-					Action:            action,
-					Timestamp:         ev.Header.Timestamp,
-					SubsecondSequence: perSecondEventCounts[counterLookupOffset][e.TableID],
-					Gtid:              lastGTIDString,
+					Table:          table,
+					Rows:           e.Rows,
+					Action:         action,
+					Timestamp:      txnCommitTime,
+					ServerId:       serverUuid,
+					GtidEventCount: gtidEventCount,
+					Gtid:           eventGtid,
 				}
 
 				OnRow(&rowE)
-
-				perSecondEventCounts[counterLookupOffset][e.TableID]++
+				gtidEventCount++
 			}
 
 			updateReplicationDelay(ev.Header.Timestamp)

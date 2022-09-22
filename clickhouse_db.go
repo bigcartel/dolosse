@@ -20,6 +20,7 @@ type ClickhouseDb struct {
 
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const actionColumnName = "changelog_action"
+const eventIdColumnName = "changelog_id"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
@@ -101,27 +102,28 @@ func (db ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64
 	return len(idsMap) > 0, idsMap
 }
 
-func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[int64]bool) {
+func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
 	queryString := fmt.Sprintf(`
 		SELECT
 		%s
 		FROM %s where %s >= $1 and %s <= $2`,
-		eventCreatedAtColumnName,
+		eventIdColumnName,
 		tableWithDb,
 		eventCreatedAtColumnName,
 		eventCreatedAtColumnName)
 
 	duplicates := db.Query(queryString, start.Add(-1*time.Second), end.Add(1*time.Second))
 
-	duplicatesMap := make(map[int64]bool)
+	// TODO is this something where I could re-use memory - would it be beneficial?
+	duplicatesMap := make(map[string]bool)
 
 	for _, dup := range duplicates {
-		v, ok := dup[0].(time.Time)
+		v, ok := dup[0].(string)
 		if !ok {
-			log.Fatalf("Failed converting %v to time.Time", v)
+			log.Fatalf("Failed converting %v to string", v)
 		}
 
-		duplicatesMap[v.UnixNano()] = true
+		duplicatesMap[v] = true
 	}
 
 	return len(duplicates) > 0, duplicatesMap
@@ -213,8 +215,10 @@ func (db ClickhouseDb) CheckSchema() error {
 
 		requiredCreatedAtType := "DateTime64(9)"
 		requiredActionType := "LowCardinality(String)"
+		requiredIdType := "String"
 		validEventCreatedAt := false
 		validAction := false
+		validId := false
 
 		for _, column := range columns {
 			switch column.Name {
@@ -222,10 +226,12 @@ func (db ClickhouseDb) CheckSchema() error {
 				validEventCreatedAt = column.Type == requiredCreatedAtType
 			case actionColumnName:
 				validAction = column.Type == requiredActionType
+			case eventIdColumnName:
+				validId = column.Type == requiredIdType
 			}
 		}
 
-		if !validEventCreatedAt || !validAction {
+		if !validEventCreatedAt || !validAction || !validId {
 			baseError := fmt.Sprintf("Clickhouse destination table %s requires columns",
 				table)
 
@@ -238,6 +244,10 @@ func (db ClickhouseDb) CheckSchema() error {
 			if !validAction {
 				columnStrings = append(columnStrings,
 					fmt.Sprintf("%s %s", actionColumnName, requiredActionType))
+			}
+			if !validId {
+				columnStrings = append(columnStrings,
+					fmt.Sprintf("%s %s", eventIdColumnName, requiredIdType))
 			}
 
 			invalidTableMessages = append(invalidTableMessages, fmt.Sprintf("%s %s", baseError, strings.Join(columnStrings, ", ")))

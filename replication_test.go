@@ -113,7 +113,7 @@ func TestBasicReplication(t *testing.T) {
 				price Decimal(10, 2),
 				description Nullable(String),
 				created_at DateTime,
-				changelog_hash UInt64,
+				changelog_id String,
 				changelog_action LowCardinality(String),
 				changelog_event_created_at DateTime64(9)
 			)

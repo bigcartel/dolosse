@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -85,6 +86,7 @@ type RowInsertData struct {
 	EventTable     string
 	EventCreatedAt time.Time
 	EventAction    string
+	EventId        string
 	Event          RowData
 }
 
@@ -150,10 +152,14 @@ func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
 	return columns, (columns != nil && len(columns.columns) > 0)
 }
 
+func gtidRangeString(sid string, gtid int64) string {
+	return sid + ":1-" + strconv.FormatInt(gtid, 10)
+}
+
 func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *RowInsertData) {
 	for event := range input {
-		if event.Gtid != "" {
-			latestProcessingGtid <- event.Gtid
+		if event.Action != "dump" && event.ServerId != "" {
+			latestProcessingGtid <- gtidRangeString(event.ServerId, event.Gtid)
 		}
 
 		columns, hasColumns := cachedChColumnsForTable(event.Table.Name)
@@ -167,7 +173,7 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
-		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd(dupIdString(event.Table.Name, event.Timestamp, event.SubsecondSequence)) {
+		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd([]byte(event.EventId())) {
 			incrementStat(skippedLocallyFilterDuplicates)
 		} else {
 			output <- insertData
@@ -223,15 +229,15 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	}
 
 	var timestamp time.Time
-	if e.Timestamp > 0 {
-		timestamp = time.
-			Unix(int64(e.Timestamp), 0).
-			Add(time.Duration(e.SubsecondSequence%1000000000) * time.Nanosecond)
+	if !e.Timestamp.IsZero() {
+		timestamp = e.Timestamp
 	} else {
 		timestamp = time.Now()
 	}
 
 	insertData.Event[eventCreatedAtColumnName] = timestamp
+	eventId := e.EventId()
+	insertData.Event[eventIdColumnName] = eventId
 
 	if isDuplicate {
 		return insertData, true
@@ -246,6 +252,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	}
 
 	insertData.Id = id
+	insertData.EventId = eventId
 	insertData.EventTable = tableName
 	insertData.EventCreatedAt = timestamp
 	insertData.EventAction = e.Action
@@ -260,10 +267,6 @@ func OnRow(e *MysqlReplicationRowEvent) {
 
 func tableWithDb(table string) string {
 	return fmt.Sprintf("%s.%s", *clickhouseDb, table)
-}
-
-func dupIdString(tableName string, binlogEventCreatedAt, binlogSubsecondSequence uint32) []byte {
-	return []byte(fmt.Sprintf("%s-%d-%d", tableName, binlogEventCreatedAt, binlogSubsecondSequence))
 }
 
 func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
@@ -352,7 +355,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	writeCount := 0
 
 	for _, rowInsertData := range *processedRows {
-		if hasDuplicates && duplicatesMap[rowInsertData.EventCreatedAt.UnixNano()] {
+		if hasDuplicates && duplicatesMap[rowInsertData.EventId] {
 			incrementStat(skippedPersistedDuplicates)
 			continue
 		}
@@ -538,6 +541,10 @@ func parseFlags(args []string) {
 	}
 
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
+	// TODO add description talking about assumption and limitations.
+	// Requires row based replication is enabled.
+	// Assumes tables have an id primary key column which is used
+	// to deduplicate on data dump.
 
 	var _ = fs.String("config", "", "config file (optional)")
 	Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
