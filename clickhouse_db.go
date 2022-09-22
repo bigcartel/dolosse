@@ -20,7 +20,6 @@ type ClickhouseDb struct {
 
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const actionColumnName = "changelog_action"
-const hashColumnName = "changelog_hash"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
@@ -102,25 +101,27 @@ func (db ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64
 	return len(idsMap) > 0, idsMap
 }
 
-func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
+func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[int64]bool) {
 	queryString := fmt.Sprintf(`
 		SELECT
-		id,
 		%s
 		FROM %s where %s >= $1 and %s <= $2`,
-		hashColumnName,
+		eventCreatedAtColumnName,
 		tableWithDb,
 		eventCreatedAtColumnName,
 		eventCreatedAtColumnName)
 
 	duplicates := db.Query(queryString, start.Add(-1*time.Second), end.Add(1*time.Second))
 
-	duplicatesMap := make(map[string]bool)
+	duplicatesMap := make(map[int64]bool)
 
 	for _, dup := range duplicates {
-		dupString := dupIdString(dup[0], dup[1])
+		v, ok := dup[0].(time.Time)
+		if !ok {
+			log.Fatalf("Failed converting %v to time.Time", v)
+		}
 
-		duplicatesMap[dupString] = true
+		duplicatesMap[v.UnixNano()] = true
 	}
 
 	return len(duplicates) > 0, duplicatesMap
@@ -212,10 +213,8 @@ func (db ClickhouseDb) CheckSchema() error {
 
 		requiredCreatedAtType := "DateTime64(9)"
 		requiredActionType := "LowCardinality(String)"
-		requiredHashType := "UInt64"
 		validEventCreatedAt := false
 		validAction := false
-		validHash := false
 
 		for _, column := range columns {
 			switch column.Name {
@@ -223,12 +222,10 @@ func (db ClickhouseDb) CheckSchema() error {
 				validEventCreatedAt = column.Type == requiredCreatedAtType
 			case actionColumnName:
 				validAction = column.Type == requiredActionType
-			case hashColumnName:
-				validHash = column.Type == requiredHashType
 			}
 		}
 
-		if !validEventCreatedAt || !validAction || !validHash {
+		if !validEventCreatedAt || !validAction {
 			baseError := fmt.Sprintf("Clickhouse destination table %s requires columns",
 				table)
 
@@ -241,10 +238,6 @@ func (db ClickhouseDb) CheckSchema() error {
 			if !validAction {
 				columnStrings = append(columnStrings,
 					fmt.Sprintf("%s %s", actionColumnName, requiredActionType))
-			}
-			if !validHash {
-				columnStrings = append(columnStrings,
-					fmt.Sprintf("%s %s", hashColumnName, requiredHashType))
 			}
 
 			invalidTableMessages = append(invalidTableMessages, fmt.Sprintf("%s %s", baseError, strings.Join(columnStrings, ", ")))

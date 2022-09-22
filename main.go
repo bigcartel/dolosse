@@ -81,13 +81,11 @@ type ClickhouseBatchRow struct {
 }
 
 type RowInsertData struct {
-	Id               int64
-	EventTable       string
-	EventCreatedAt   time.Time
-	EventChecksum    uint64
-	EventAction      string
-	DeduplicationKey string
-	Event            RowData
+	Id             int64
+	EventTable     string
+	EventCreatedAt time.Time
+	EventAction    string
+	Event          RowData
 }
 
 func (d *RowInsertData) Reset() {
@@ -169,7 +167,7 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 
 		if isDup {
 			incrementStat(skippedRowLevelDuplicates)
-		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd([]byte(insertData.DeduplicationKey)) {
+		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd(dupIdString(event.Table.Name, event.Timestamp, event.SubsecondSequence)) {
 			incrementStat(skippedLocallyFilterDuplicates)
 		} else {
 			output <- insertData
@@ -239,8 +237,6 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 		return insertData, true
 	}
 
-	checksum := checksumMapValues(insertData.Event, columns.columns)
-	insertData.Event[hashColumnName] = checksum
 	insertData.Event[actionColumnName] = e.Action
 
 	var id int64
@@ -252,9 +248,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	insertData.Id = id
 	insertData.EventTable = tableName
 	insertData.EventCreatedAt = timestamp
-	insertData.EventChecksum = checksum
 	insertData.EventAction = e.Action
-	insertData.DeduplicationKey = dupIdString(id, checksum)
 
 	return insertData, false
 }
@@ -268,8 +262,8 @@ func tableWithDb(table string) string {
 	return fmt.Sprintf("%s.%s", *clickhouseDb, table)
 }
 
-func dupIdString(id interface{}, checksum interface{}) string {
-	return fmt.Sprintf("%d %d", id, checksum)
+func dupIdString(tableName string, binlogEventCreatedAt, binlogSubsecondSequence uint32) []byte {
+	return []byte(fmt.Sprintf("%s-%d-%d", tableName, binlogEventCreatedAt, binlogSubsecondSequence))
 }
 
 func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
@@ -358,9 +352,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	writeCount := 0
 
 	for _, rowInsertData := range *processedRows {
-		dedupeKey := rowInsertData.DeduplicationKey
-
-		if hasDuplicates && duplicatesMap[dedupeKey] {
+		if hasDuplicates && duplicatesMap[rowInsertData.EventCreatedAt.UnixNano()] {
 			incrementStat(skippedPersistedDuplicates)
 			continue
 		}
