@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"os"
 
 	"github.com/siddontang/go-log/log"
@@ -34,8 +35,16 @@ func readBloomFilterState() {
 	checkErr(err)
 	if fi.Size() > 0 {
 		bytes, err := batchDuplicatesFilter.ImportElementsFrom(f)
-		checkErr(err)
-		log.Infof("Read %d bytes for inverse bloom filter from %s", bytes, f.Name())
+		if err != nil {
+			if err == io.EOF {
+				log.Infoln("local deduplication state was corrupted, skipping")
+				return
+			} else {
+				checkErr(err)
+			}
+		}
+
+		log.Debugf("Read %d bytes for deduplication state from %s", bytes, f.Name())
 	}
 }
 

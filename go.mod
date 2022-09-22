@@ -13,6 +13,7 @@ require (
 	github.com/shopspring/decimal v1.3.1
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07
 	github.com/tylertreat/BoomFilters v0.0.0-20210315201527-1a82519a3e43
+	golang.org/x/exp v0.0.0-20220921164117-439092de6870
 )
 
 require (
@@ -33,7 +34,6 @@ require (
 	go.opentelemetry.io/otel v1.9.0 // indirect
 	go.opentelemetry.io/otel/trace v1.9.0 // indirect
 	go.uber.org/atomic v1.10.0 // indirect
-	golang.org/x/exp v0.0.0-20220921164117-439092de6870 // indirect
 	golang.org/x/sys v0.0.0-20220919091848-fb04ddd9f9c8 // indirect
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 )
