@@ -57,7 +57,7 @@ func getMysqlTableNames() []string {
 // lazy load instead of doing a scheduled load at a particular time?
 // TODO this needs to be reset as well on alter tables
 func getMysqlTable(db, table string) *schema.Table {
-	v := mysqlColumns.get(table)
+	v := mysqlColumns.Get(table)
 
 	if v != nil {
 		return *v
@@ -65,7 +65,7 @@ func getMysqlTable(db, table string) *schema.Table {
 		return withMysqlConnection(func(conn *client.Conn) *schema.Table {
 			t, err := schema.NewTable(conn, db, table)
 			checkErr(err)
-			mysqlColumns.set(table, &t)
+			mysqlColumns.Set(table, &t)
 			return t
 		})
 	}
@@ -86,7 +86,9 @@ func withMysqlConnection[T any](f func(c *client.Conn) T) T {
 	return rv
 }
 
-func DumpMysqlDb() {
+var dumpingTables = NewConcurrentMap[struct{}]()
+
+func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 	dumping.Store(true)
 
 	var wg sync.WaitGroup
@@ -94,12 +96,19 @@ func DumpMysqlDb() {
 
 	// TODO paralellize with either worker or waitgroup pattern.
 	for table := range *chColumns.m {
-		wg.Add(1)
-		go func(t string) {
-			working <- true
-			dumpTable(*mysqlDb, t)
-			wg.Done()
-		}(table)
+		if dumpingTables.Get(table) == nil && !chConn.GetTableDumped(table) || forceDump {
+			dumpingTables.Set(table, &struct{}{})
+			chConn.SetTableDumped(table, false) // reset if force dump
+
+			wg.Add(1)
+
+			go func(t string) {
+				working <- true
+				dumpTable(*mysqlDb, t)
+				chConn.SetTableDumped(table, true)
+				wg.Done()
+			}(table)
+		}
 	}
 
 	wg.Wait()

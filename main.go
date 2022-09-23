@@ -68,7 +68,6 @@ var skippedLocallyFilterDuplicates = new(uint64)
 var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
 var dumping = atomic.Bool{}
-var shouldDump = atomic.Bool{} // TODO set to true if no gtid key is found in clickhouse? that way it always dumps on first run
 
 type LookupMap map[string]bool
 
@@ -120,7 +119,7 @@ func syncChColumns(clickhouseDb ClickhouseDb) {
 	for table := range existingClickhouseTables {
 		cols, lookup := clickhouseDb.Columns(table)
 
-		chColumns.set(table, &ChColumnSet{
+		chColumns.Set(table, &ChColumnSet{
 			columns:      cols,
 			columnLookup: lookup,
 		})
@@ -148,7 +147,7 @@ func checkErr(err error) {
 }
 
 func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
-	columns := chColumns.get(table)
+	columns := chColumns.Get(table)
 	return columns, (columns != nil && len(columns.columns) > 0)
 }
 
@@ -305,7 +304,7 @@ func logNoRows(table string) {
 }
 
 func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowInsertData) {
-	columns := chColumns.get(table)
+	columns := chColumns.Get(table)
 	if columns == nil {
 		log.Infoln("No columns in clickhouse found for", table)
 		return
@@ -491,9 +490,9 @@ func batchWrite() {
 	deliver := func() {
 		// Could also get delay by peeking events periodicially to avoid computing it
 		log.Infoln("replication delay is", replicationDelay.Load(), "seconds")
-		if shouldDump.Load() && (replicationDelay.Load() < 10 || *DumpImmediately) {
-			shouldDump.Store(false)
-			go DumpMysqlDb()
+		if startFromGtid == nil && (replicationDelay.Load() < 10 || *DumpImmediately) {
+			dumping.Store(true)
+			go DumpMysqlDb(&clickhouseDb, *Dump || *DumpImmediately)
 			log.Infoln("Started mysql db dump")
 		}
 
@@ -548,10 +547,10 @@ func parseFlags(args []string) {
 
 	var _ = fs.String("config", "", "config file (optional)")
 	Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
+	DumpImmediately = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
 	rewind = fs.Bool("rewind", false, "Reset stored binlog position and start replication from earliest available binlog event")
 	runProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 	startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
-	DumpImmediately = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
 	mysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
 	mysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
 	mysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
@@ -596,10 +595,6 @@ func startSync() {
 	// TODO how do we determine what should be dumped on a startup?
 	// should it check a clickhouse table config to determine status?
 	minimumStartingGtid := getEarliestGtidStartPoint()
-
-	if *Dump || *DumpImmediately {
-		shouldDump.Store(true)
-	}
 
 	if *Dump || *DumpImmediately || *rewind {
 		clickhouseDb.SetGTIDString(minimumStartingGtid)

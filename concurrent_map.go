@@ -16,13 +16,13 @@ func NewConcurrentMap[V any]() ConcurrentMap[V] {
 	}
 }
 
-func (m *ConcurrentMap[V]) get(k string) *V {
+func (m *ConcurrentMap[V]) Get(k string) *V {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return (*m.m)[k]
 }
 
-func (m *ConcurrentMap[V]) set(k string, v *V) {
+func (m *ConcurrentMap[V]) Set(k string, v *V) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	(*m.m)[k] = v

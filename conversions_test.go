@@ -93,7 +93,7 @@ func TestParseBadYaml(t *testing.T) {
 :announcement_background_color: "#000000"
 :error_text_color: "#FFFFFF"
 :error_background_color: "#EB0000"
-:announcement_message_text: 'USE CODE â€œ15AJADAâ€ FOR $$$ OF YOUR FIRST ORDER, YES I
+:announcement_message_text: 'USE CODE â€œ15AJADAâ€\u009d FOR $$$ OF YOUR FIRST ORDER, YES I
   STILL SELL BRACES  '
 :maintenance_message: We're working on our shop right now.<br /><br />Please check
   back soon.
@@ -404,6 +404,9 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	}{}
 
 	err = json.Unmarshal(parseValue(string(yamlString), schema.TYPE_STRING, "order_transactions", "params").([]byte), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	anonymizedEmail := out.Email
 	anonymizedPassword := out.Password

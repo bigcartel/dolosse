@@ -37,7 +37,7 @@ func establishClickhouseConnection() (ClickhouseDb, error) {
 	}, err
 }
 
-func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
+func (db *ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 	rows, err := db.conn.Query(context.Background(), q, args...)
 	if err != nil {
 		log.Panicln(err, q, args)
@@ -83,7 +83,7 @@ func (db ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 	return scannedRows
 }
 
-func (db ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, map[int64]bool) {
+func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, map[int64]bool) {
 	queryString := fmt.Sprintf(`
 		SELECT
 		id
@@ -102,7 +102,7 @@ func (db ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64
 	return len(idsMap) > 0, idsMap
 }
 
-func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
+func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
 	queryString := fmt.Sprintf(`
 		SELECT
 		%s
@@ -129,7 +129,7 @@ func (db ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end 
 	return len(duplicates) > 0, duplicatesMap
 }
 
-func (db ClickhouseDb) Setup() {
+func (db *ClickhouseDb) Setup() {
 	ctx := context.Background()
 	err := db.conn.Exec(ctx, fmt.Sprintf("create database if not exists %s", *clickhouseDb))
 
@@ -158,7 +158,7 @@ type ChColumnInfo struct {
 
 type ChColumnMap map[string][]ChColumnInfo
 
-func (db ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
+func (db *ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
 	mysqlTables := getMysqlTableNames()
 	clickhouseTableMap := db.getColumnMap()
 	columnsForTables := make(ChColumnMap, len(mysqlTables))
@@ -173,7 +173,7 @@ func (db ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
 	return columnsForTables
 }
 
-func (db ClickhouseDb) getColumnMap() ChColumnMap {
+func (db *ClickhouseDb) getColumnMap() ChColumnMap {
 	rows, err := db.conn.Query(context.Background(),
 		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, *clickhouseDb))
 
@@ -203,7 +203,7 @@ func (db ClickhouseDb) getColumnMap() ChColumnMap {
 	return columns
 }
 
-func (db ClickhouseDb) CheckSchema() error {
+func (db *ClickhouseDb) CheckSchema() error {
 	clickhouseColumnsByTable := db.ColumnsForMysqlTables()
 
 	invalidTableMessages := make([]string, 0, len(clickhouseColumnsByTable))
@@ -271,7 +271,7 @@ type ClickhouseQueryColumn struct {
 
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
-func (db ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMap) {
+func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMap) {
 	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, *clickhouseDb, table)
 	rows, err := db.conn.Query(context.Background(), queryString)
 
@@ -304,25 +304,15 @@ func (db ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMap
 
 var gtidSetKey string = "last_synced_gtid_set"
 
-func (db ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
-	type storedGtidSet struct {
-		Value string `ch:"value"`
-	}
+type storedKeyValue struct {
+	Value string `ch:"value"`
+}
 
-	var rows []storedGtidSet
+func (db *ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
+	gtidString := db.GetStateString(gtidSetKey)
 
-	err := db.conn.Select(context.Background(),
-		&rows,
-		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *clickhouseDb),
-		gtidSetKey)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	gtidString := fallback
-	if len(rows) > 0 {
-		gtidString = rows[0].Value
+	if gtidString == "" {
+		gtidString = fallback
 	}
 
 	log.Infoln("read gtid set", gtidString)
@@ -335,15 +325,58 @@ func (db ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 	return set
 }
 
-func (db ClickhouseDb) SetGTIDString(s string) {
-	err := db.conn.Exec(context.Background(),
-		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", *clickhouseDb),
-		gtidSetKey,
-		s)
+func (db *ClickhouseDb) SetGTIDString(s string) {
+	db.SetStateString(gtidSetKey, s)
+	log.Infoln("persisted gtid set", s)
+}
+
+func (db *ClickhouseDb) tableDumpedKey(table string) string {
+	return fmt.Sprintf("dumped-%s", table)
+}
+
+func (db *ClickhouseDb) GetTableDumped(table string) bool {
+	tableDumped := db.GetStateString(db.tableDumpedKey(table))
+	return tableDumped == "true"
+}
+
+func (db *ClickhouseDb) SetTableDumped(table string, dumped bool) {
+	val := "false"
+	if dumped {
+		val = "true"
+	}
+
+	db.SetStateString(db.tableDumpedKey(table), val)
+}
+
+func (db *ClickhouseDb) GetStateString(key string) string {
+	var rows []storedKeyValue
+
+	err := db.conn.Select(context.Background(),
+		&rows,
+		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *clickhouseDb),
+		gtidSetKey)
 
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	log.Infoln("persisted gtid set", s)
+	value := ""
+	if len(rows) > 0 {
+		value = rows[0].Value
+	}
+
+	return value
+}
+
+func (db *ClickhouseDb) SetStateString(key, value string) {
+	err := db.conn.Exec(context.Background(),
+		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", *clickhouseDb),
+		key,
+		value)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Debugf("persisted key %s", key)
 }
