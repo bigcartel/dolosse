@@ -30,10 +30,7 @@ func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn Cli
 		t.Error(err)
 	}
 
-	clickhouseConn, err := establishClickhouseConnection()
-	if err != nil {
-		t.Error(err)
-	}
+	clickhouseConn := unwrap(establishClickhouseConnection())
 	clickhouseConn.ClearReplicationState(context.Background())
 	clickhouseConn.Setup(context.Background())
 
@@ -50,8 +47,7 @@ func execMysqlStatements(mysqlConn *client.Conn, statements string) {
 
 func execChStatements(chDb ClickhouseDb, statements ...string) {
 	for i := range statements {
-		err := chDb.conn.Exec(context.TODO(), statements[i])
-		must(err)
+		must(chDb.conn.Exec(context.TODO(), statements[i]))
 	}
 }
 

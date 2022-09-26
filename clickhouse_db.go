@@ -145,7 +145,7 @@ func (db *ClickhouseDb) Setup(ctx context.Context) {
 }
 
 func (db *ClickhouseDb) ClearReplicationState(ctx context.Context) {
-	must(db.conn.Exec(ctx, fmt.Sprintf("drop database if exists %s", *Config.ClickhouseDb)))
+	must(db.conn.Exec(ctx, fmt.Sprintf("drop table if exists %s.binlog_sync_state", *Config.ClickhouseDb)))
 }
 
 // unfortunately we can't get reflect types when querying all tables at once
@@ -294,10 +294,6 @@ func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMa
 
 var gtidSetKey string = "last_synced_gtid_set"
 
-type storedKeyValue struct {
-	Value string `ch:"value"`
-}
-
 func (db *ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 	gtidString := db.GetStateString(gtidSetKey)
 
@@ -339,12 +335,16 @@ func (db *ClickhouseDb) SetTableDumped(table string, dumped bool) {
 }
 
 func (db *ClickhouseDb) GetStateString(key string) string {
+	type storedKeyValue struct {
+		Value string `ch:"value"`
+	}
+
 	var rows []storedKeyValue
 
 	err := db.conn.Select(context.Background(),
 		&rows,
 		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *Config.ClickhouseDb),
-		gtidSetKey)
+		key)
 
 	if err != nil {
 		log.Fatal(err)

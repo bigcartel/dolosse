@@ -268,7 +268,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 		clickhouseDb.SetGTIDString(lastGtidSet)
 	}
 
-	writeBloomFilterState()
+	writeBloomFilterState(clickhouseDb)
 }
 
 func logNoRows(table string) {
@@ -505,6 +505,7 @@ func batchWrite() {
 func startSync(ctx context.Context) {
 	clickhouseDb := unwrap(establishClickhouseConnection())
 	clickhouseDb.Setup(ctx)
+	readBloomFilterState(clickhouseDb)
 	initMysqlConnectionPool()
 
 	// TODO validate all clickhouse table columns are compatible with mysql table columns
@@ -542,8 +543,6 @@ func startSync(ctx context.Context) {
 
 func main() {
 	Config.ParseFlags(os.Args[1:])
-
-	readBloomFilterState()
 
 	var p *profile.Profile
 	if *Config.RunProfile {
