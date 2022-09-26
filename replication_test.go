@@ -8,6 +8,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/assert"
 )
 
 func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb)) {
@@ -73,12 +74,8 @@ func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount i
 	return r
 }
 
-func TestBasicReplication(t *testing.T) {
-	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
-		startGtid := getMysqlVariable(mysqlConn, "@@GLOBAL.gtid_executed")
-		startFromGtid = &startGtid
-
-		execMysqlStatements(mysqlConn, `
+func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
+	execMysqlStatements(mysqlConn, `
 			CREATE DATABASE IF NOT EXISTS test;
 			USE test;
 			DROP TABLE IF EXISTS test;
@@ -105,9 +102,9 @@ func TestBasicReplication(t *testing.T) {
 			UPDATE test SET visits=2 WHERE id = 1;
 			`)
 
-		execChStatements(clickhouseConn,
-			`DROP TABLE IF EXISTS test.test`,
-			`CREATE TABLE test.test (
+	execChStatements(clickhouseConn,
+		`DROP TABLE IF EXISTS test.test`,
+		`CREATE TABLE test.test (
 				id Int32,
 				name String,
 				price Decimal(10, 2),
@@ -120,45 +117,27 @@ func TestBasicReplication(t *testing.T) {
 		  ENGINE = MergeTree
 			ORDER BY (id)
 			`)
+}
+
+func TestBasicReplication(t *testing.T) {
+	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
+		startGtid := getMysqlVariable(mysqlConn, "@@GLOBAL.gtid_executed")
+		startFromGtid = &startGtid
+
+		InitDbs(mysqlConn, clickhouseConn)
 
 		go startSync()
 
-		// TODO this breaks now because the dump kicks off before any replication happens, so there's always a dump duplicate
-		// I think I need to make it so that if you explicitly set a starting gtid it doesn't auto-dump.
 		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 2)
 
 		if len(r) > 2 {
 			t.Fatal("Expected 2 replicated rows, got ", len(r), " ", r)
 		}
 
-		expectedId1 := int32(1)
-		gotId1 := r[0][0].(int32)
-		if expectedId1 != gotId1 {
-			t.Errorf("expected id %d for row 1 got %d", expectedId1, gotId1)
-		}
-
-		expectedName1 := "test thing"
-		gotName1 := r[0][1].(string)
-		if expectedName1 != gotName1 {
-			t.Errorf("expected name %s for row 1 got %s", expectedName1, gotName1)
-		}
-
-		expectedPrice1, _ := decimal.NewFromString("12.31")
-		gotPrice1 := r[0][2].(decimal.Decimal)
-		if !expectedPrice1.Equal(gotPrice1) {
-			t.Errorf("expected price %s for row 1 got %s", expectedPrice1, gotPrice1)
-		}
-
-		expectedDescription1 := "my cool description"
-		gotDescription1 := **r[0][3].(**string)
-		if expectedDescription1 != gotDescription1 {
-			t.Errorf("expected description %s for row 1 got %s", expectedDescription1, gotDescription1)
-		}
-
-		expectedPrice2, _ := decimal.NewFromString("12.33")
-		gotPrice2 := r[1][2].(decimal.Decimal)
-		if !expectedPrice2.Equal(gotPrice2) {
-			t.Errorf("expected price %s for row 2 got %s", expectedPrice2, gotPrice2)
-		}
+		assert.Equal(t, int32(1), r[0][0].(int32), "replicated id should match")
+		assert.Equal(t, "test thing", r[0][1].(string), "replicated name should match")
+		assert.Equal(t, unwrap(decimal.NewFromString("12.31")), r[0][2].(decimal.Decimal), "replicated price should match")
+		assert.Equal(t, "my cool description", **r[0][3].(**string), "replicated description should match")
+		assert.Equal(t, unwrap(decimal.NewFromString("12.33")), r[1][2].(decimal.Decimal), "second replicated price should match")
 	})
 }

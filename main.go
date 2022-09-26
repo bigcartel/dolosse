@@ -575,7 +575,7 @@ func startSync() {
 	// and that clickhouse tables have event_created_at DateTime, id same_as_mysql, action string
 	// use the clickhouse mysql table function with the credentials provided to this command
 	// to do it using clickhouse translated types for max compat
-	must(clickhouseDb.CheckSchema())
+	clickhouseDb.CheckSchema()
 
 	syncChColumns(clickhouseDb)
 

@@ -195,7 +195,7 @@ func (db *ClickhouseDb) getColumnMap() ChColumnMap {
 	return columns
 }
 
-func (db *ClickhouseDb) CheckSchema() error {
+func (db *ClickhouseDb) CheckSchema() {
 	clickhouseColumnsByTable := db.ColumnsForMysqlTables()
 
 	invalidTableMessages := make([]string, 0, len(clickhouseColumnsByTable))
@@ -252,8 +252,6 @@ func (db *ClickhouseDb) CheckSchema() error {
 		}
 		os.Exit(0)
 	}
-
-	return nil
 }
 
 type ClickhouseQueryColumn struct {
