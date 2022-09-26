@@ -86,7 +86,6 @@ func startReplication(ctx context.Context, gtidSet mysql.GTIDSet) error {
 			if err != nil {
 				return err
 			}
-			log.Infoln(ev.Header.EventType.String())
 
 			// This is a partial copy of
 			// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133

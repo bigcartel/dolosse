@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/peterbourgon/ff/v3"
 	"github.com/pkg/profile"
 	"golang.org/x/exp/maps"
+	"golang.org/x/exp/slices"
 
 	"sync"
 
@@ -42,6 +44,8 @@ type GlobalConfig struct {
 	Dump,
 	Rewind,
 	RunProfile *bool
+
+	IgnoredColumnsForDeduplication []string
 
 	flagsParsed bool
 }
@@ -70,7 +74,10 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.ClickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
 	c.ClickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to (also available via CLICKHOUSE_DB)")
 	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Second, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
-	// TODO add ignoredColumnsForDeduplication here
+	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
+
+	c.IgnoredColumnsForDeduplication = strings.Split(*IgnoredColumnsForDeduplication, ",")
+
 	// TODO add clickhouse password flag
 	// TODO make various global configs cli args for different workloads
 
@@ -254,7 +261,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 		if columns.columnLookup[columnName] {
 			if isDuplicate &&
 				hasPreviousEvent &&
-				!ignoredColumnsForDeduplication[columnName] &&
+				!slices.Contains(Config.IgnoredColumnsForDeduplication, columnName) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
 				isDuplicate = false
 			}
