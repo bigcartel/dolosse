@@ -39,7 +39,7 @@ func getMysqlVariable(conn *client.Conn, variable string) string {
 
 func getMysqlTableNames() []string {
 	return withMysqlConnection(func(conn *client.Conn) []string {
-		rr, err := conn.Execute(fmt.Sprintf("SHOW TABLES FROM %s", *mysqlDb))
+		rr, err := conn.Execute(fmt.Sprintf("SHOW TABLES FROM %s", *Config.MysqlDb))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -73,7 +73,7 @@ func getMysqlTable(db, table string) *schema.Table {
 
 func initMysqlConnectionPool() {
 	if !mysqlPoolInitialized {
-		mysqlPool = client.NewPool(log.Debugf, 10, 20, 5, *mysqlAddr, *mysqlUser, *mysqlPassword, *mysqlDb)
+		mysqlPool = client.NewPool(log.Debugf, 10, 20, 5, *Config.MysqlAddr, *Config.MysqlUser, *Config.MysqlPassword, *Config.MysqlDb)
 		mysqlPoolInitialized = true
 	}
 }
@@ -89,8 +89,6 @@ func withMysqlConnection[T any](f func(c *client.Conn) T) T {
 var dumpingTables = NewConcurrentMap[struct{}]()
 
 func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
-	dumping.Store(true)
-
 	var wg sync.WaitGroup
 	working := make(chan bool, concurrentMysqlDumpSelects)
 
@@ -104,7 +102,7 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 
 			go func(t string) {
 				working <- true
-				dumpTable(*mysqlDb, t)
+				dumpTable(*Config.MysqlDb, t)
 				chConn.SetTableDumped(table, true)
 				wg.Done()
 			}(table)
@@ -113,7 +111,7 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 
 	wg.Wait()
 
-	dumping.Store(false)
+	dumped.Store(true)
 }
 
 type DumpFieldVal interface {

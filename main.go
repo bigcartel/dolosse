@@ -26,22 +26,65 @@ var ignoredColumnsForDeduplication = map[string]bool{
 	"updated_at": true,
 }
 
-var clickhouseDb,
-	clickhouseAddr,
-	mysqlAddr,
-	mysqlUser,
-	mysqlPassword,
-	mysqlDb,
-	startFromGtid *string
+type GlobalConfig struct {
+	ClickhouseDb,
+	ClickhouseAddr,
+	MysqlAddr,
+	MysqlUser,
+	MysqlPassword,
+	MysqlDb,
+	StartFromGtid *string
 
-var batchWriteInterval *time.Duration
+	MysqlDbByte []byte
 
-var DumpImmediately,
+	BatchWriteInterval *time.Duration
+	DumpImmediately,
 	Dump,
-	rewind,
-	runProfile *bool
+	Rewind,
+	RunProfile *bool
 
-var mysqlDbByte []byte
+	flagsParsed bool
+}
+
+func (c *GlobalConfig) ParseFlags(args []string) {
+	if c.flagsParsed {
+		return
+	}
+
+	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
+	// TODO add description talking about assumption and limitations.
+	// Requires row based replication is enabled.
+	// Assumes tables have an id primary key column which is used
+	// to deduplicate on data dump.
+
+	var _ = fs.String("config", "", "config file (optional)")
+	c.Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
+	c.DumpImmediately = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
+	c.Rewind = fs.Bool("rewind", false, "Reset stored binlog position and start replication from earliest available binlog event")
+	c.RunProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
+	c.StartFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
+	c.MysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
+	c.MysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
+	c.MysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
+	c.MysqlPassword = fs.String("mysql-password", "", "mysql password (also via MYSQL_PASSWORD)")
+	c.ClickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
+	c.ClickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to (also available via CLICKHOUSE_DB)")
+	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Second, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
+	// TODO add ignoredColumnsForDeduplication here
+	// TODO add clickhouse password flag
+	// TODO make various global configs cli args for different workloads
+
+	must(ff.Parse(fs, args,
+		ff.WithConfigFileFlag("config"),
+		ff.WithConfigFileParser(ff.PlainParser),
+	))
+
+	c.MysqlDbByte = []byte(*Config.MysqlDb)
+
+	c.flagsParsed = true
+}
+
+var Config = GlobalConfig{}
 
 type ChColumnSet struct {
 	columns      []ClickhouseQueryColumn
@@ -67,7 +110,7 @@ var skippedRowLevelDuplicates = new(uint64)
 var skippedLocallyFilterDuplicates = new(uint64)
 var skippedPersistedDuplicates = new(uint64)
 var skippedDumpDuplicates = new(uint64)
-var dumping = atomic.Bool{}
+var dumped = atomic.Bool{}
 
 type LookupMap map[string]bool
 
@@ -259,7 +302,7 @@ func OnRow(e *MysqlReplicationRowEvent) {
 }
 
 func tableWithDb(table string) string {
-	return fmt.Sprintf("%s.%s", *clickhouseDb, table)
+	return fmt.Sprintf("%s.%s", *Config.ClickhouseDb, table)
 }
 
 func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
@@ -334,7 +377,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	hasStoredIds := false
 	var storedIdsMap map[int64]bool
 
-	if dumping.Load() && minMaxValues.maxDumpId > 0 {
+	if minMaxValues.maxDumpId > 0 {
 		hasStoredIds, storedIdsMap = clickhouseDb.QueryIdRange(tableWithDb,
 			minMaxValues.minDumpId,
 			minMaxValues.maxDumpId)
@@ -357,7 +400,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 			log.Panicln(rowInsertData)
 		}
 
-		if dumping.Load() && rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap[rowInsertData.Id] {
+		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap[rowInsertData.Id] {
 			incrementStat(skippedDumpDuplicates)
 			continue
 		}
@@ -472,25 +515,26 @@ func batchWrite() {
 	var counter int
 
 	resetCountAndTimer := func() {
-		timer = time.NewTimer(*batchWriteInterval * time.Second)
+		timer = time.NewTimer(*Config.BatchWriteInterval)
 		counter = 0
 	}
 
 	resetCountAndTimer()
 
 	deliver := func() {
+		delay := replicationDelay.Load()
 		// Could also get delay by peeking events periodicially to avoid computing it
-		log.Infoln("replication delay is", replicationDelay.Load(), "seconds")
-		if startFromGtid == nil && (replicationDelay.Load() < 10 || *DumpImmediately) {
-			dumping.Store(true)
-			go DumpMysqlDb(&clickhouseDb, *Dump || *DumpImmediately)
-			log.Infoln("Started mysql db dump")
-		}
+		log.Infoln("replication delay is", delay, "seconds")
 
 		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
 		eventsByTable.Reset()
 		printStats()
 		resetCountAndTimer()
+
+		if !dumped.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
+			go DumpMysqlDb(&clickhouseDb, *Config.Dump || *Config.DumpImmediately)
+			log.Infoln("Started mysql db dump")
+		}
 	}
 
 	for {
@@ -523,52 +567,9 @@ func batchWrite() {
 	}
 }
 
-var flagsParsed = false
-
-func parseFlags(args []string) {
-	if flagsParsed {
-		return
-	}
-
-	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
-	// TODO add description talking about assumption and limitations.
-	// Requires row based replication is enabled.
-	// Assumes tables have an id primary key column which is used
-	// to deduplicate on data dump.
-
-	var _ = fs.String("config", "", "config file (optional)")
-	Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
-	DumpImmediately = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
-	rewind = fs.Bool("rewind", false, "Reset stored binlog position and start replication from earliest available binlog event")
-	runProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
-	startFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
-	mysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
-	mysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
-	mysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
-	mysqlPassword = fs.String("mysql-password", "", "mysql password (also via MYSQL_PASSWORD)")
-	clickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
-	clickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to (also available via CLICKHOUSE_DB)")
-	batchWriteInterval = fs.Duration("batch-write-interval", 10, "Interval of batch writes in seconds")
-	// TODO add clickhouse password flag
-	// TODO make various global configs cli args for different workloads
-
-	err := ff.Parse(fs, args,
-		ff.WithConfigFileFlag("config"),
-		ff.WithConfigFileParser(ff.PlainParser),
-	)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	mysqlDbByte = []byte(*mysqlDb)
-
-	flagsParsed = true
-}
-
-func startSync() {
+func startSync(ctx context.Context) {
 	clickhouseDb := unwrap(establishClickhouseConnection())
-	clickhouseDb.Setup()
+	clickhouseDb.Setup(ctx)
 	initMysqlConnectionPool()
 
 	// TODO validate all clickhouse table columns are compatible with mysql table columns
@@ -586,40 +587,48 @@ func startSync() {
 	// should it check a clickhouse table config to determine status?
 	minimumStartingGtid := getEarliestGtidStartPoint()
 
-	if *Dump || *DumpImmediately || *rewind {
+	if *Config.Dump || *Config.DumpImmediately || *Config.Rewind {
 		clickhouseDb.SetGTIDString(minimumStartingGtid)
-		startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
+		err := startReplication(ctx, clickhouseDb.GetGTIDSet(minimumStartingGtid))
+		if err != context.Canceled {
+			log.Panicln(err)
+		}
 	} else {
-		if *startFromGtid != "" {
-			clickhouseDb.SetGTIDString(*startFromGtid)
+		if *Config.StartFromGtid != "" {
+			clickhouseDb.SetGTIDString(*Config.StartFromGtid)
 		}
 
-		startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
+		err := startReplication(ctx, clickhouseDb.GetGTIDSet(minimumStartingGtid))
+		if err != context.Canceled {
+			log.Panicln(err)
+		}
 	}
 }
 
 func main() {
-	parseFlags(os.Args[1:])
+	Config.ParseFlags(os.Args[1:])
 
 	readBloomFilterState()
 
 	var p *profile.Profile
-	if *runProfile {
+	if *Config.RunProfile {
 		p = profile.Start(profile.TraceProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
+		cancel()
 		log.Infoln("Exiting...")
 		time.Sleep(2 * time.Second)
-		if *runProfile && p != nil {
+		if *Config.RunProfile && p != nil {
 			p.Stop()
 		}
 
 		os.Exit(1)
 	}()
 
-	startSync()
+	startSync(ctx)
 }

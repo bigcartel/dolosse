@@ -12,17 +12,17 @@ import (
 )
 
 func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb)) {
-	parseFlags([]string{
+	Config.ParseFlags([]string{
 		"--mysql-addr=0.0.0.0:3307",
 		"--mysql-user=root",
 		"--mysql-db=test",
 		"--mysql-password=",
 		"--clickhouse-addr=0.0.0.0:9001",
-		"--batch-write-interval=0",
+		"--batch-write-interval=10ms",
 		"--clickhouse-db=test",
 	})
 
-	mysqlConn, err := client.Connect(*mysqlAddr, *mysqlUser, "", "", func(c *client.Conn) {
+	mysqlConn, err := client.Connect(*Config.MysqlAddr, *Config.MysqlUser, "", "", func(c *client.Conn) {
 		c.SetCapability(mysql.CLIENT_MULTI_STATEMENTS)
 	})
 
@@ -34,7 +34,8 @@ func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn Cli
 	if err != nil {
 		t.Error(err)
 	}
-	clickhouseConn.Setup()
+	clickhouseConn.ClearReplicationState(context.Background())
+	clickhouseConn.Setup(context.Background())
 
 	f(mysqlConn, clickhouseConn)
 }
@@ -55,10 +56,12 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 }
 
 func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount int) [][]interface{} {
+	time.Sleep(50 * time.Millisecond)
+
 	waitingForRowAttempts := 0
 	var r [][]interface{}
 	for waitingForRowAttempts < 20 {
-		r = chDb.Query("select * from test.test order by changelog_event_created_at")
+		r = chDb.Query(query)
 		if len(r) < 2 {
 			time.Sleep(50 * time.Millisecond)
 			waitingForRowAttempts++
@@ -71,11 +74,16 @@ func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount i
 		t.Error("Failed to fetch expected rows, got ", r)
 	}
 
+	if len(r) > expectedRowCount {
+		t.Fatalf("Expected %d replicated rows, got %d - %v", expectedRowCount, len(r), r)
+	}
+
 	return r
 }
 
 func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 	execMysqlStatements(mysqlConn, `
+			RESET MASTER;
 			CREATE DATABASE IF NOT EXISTS test;
 			USE test;
 			DROP TABLE IF EXISTS test;
@@ -121,23 +129,85 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 
 func TestBasicReplication(t *testing.T) {
 	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
-		startGtid := getMysqlVariable(mysqlConn, "@@GLOBAL.gtid_executed")
-		startFromGtid = &startGtid
-
 		InitDbs(mysqlConn, clickhouseConn)
 
-		go startSync()
+		ctx, stopReplication := context.WithCancel(context.Background())
+		go startSync(ctx)
 
 		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 2)
-
-		if len(r) > 2 {
-			t.Fatal("Expected 2 replicated rows, got ", len(r), " ", r)
-		}
 
 		assert.Equal(t, int32(1), r[0][0].(int32), "replicated id should match")
 		assert.Equal(t, "test thing", r[0][1].(string), "replicated name should match")
 		assert.Equal(t, unwrap(decimal.NewFromString("12.31")), r[0][2].(decimal.Decimal), "replicated price should match")
 		assert.Equal(t, "my cool description", **r[0][3].(**string), "replicated description should match")
 		assert.Equal(t, unwrap(decimal.NewFromString("12.33")), r[1][2].(decimal.Decimal), "second replicated price should match")
+
+		stopReplication()
+	})
+}
+
+func TestReplicationAndDump(t *testing.T) {
+	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
+		InitDbs(mysqlConn, clickhouseConn)
+
+		// Unsure why I have to start with ithis insert statement, but replication
+		// from GTID event id 1 won't pick up on the first 1 insert after a reset
+		// master for some reason
+		execMysqlStatements(mysqlConn, `
+			RESET MASTER;
+			INSERT INTO test (id, name, price, description, created_at)
+			VALUES (
+				2,
+				"replicated",
+				"1.77",
+				"replicated desc",
+				NOW()
+			);
+			INSERT INTO test (id, name, price, description, created_at)
+			VALUES (
+				3,
+				"replicated",
+				"1.77",
+				"replicated desc",
+				NOW()
+			);
+			INSERT INTO test (id, name, price, description, created_at)
+			VALUES (
+				4,
+				"replicated",
+				"1.77",
+				"replicated desc",
+				NOW()
+			);
+		`)
+
+		ctx, stopReplication := context.WithCancel(context.Background())
+		go startSync(ctx)
+
+		time.Sleep(200 * time.Millisecond)
+
+		r := getChRows(t, clickhouseConn, "select id, changelog_action from test.test order by id asc", 4)
+
+		assert.Equal(t, int32(1), r[0][0].(int32), "replicated id should match")
+		assert.Equal(t, "dump", r[0][1].(string))
+		assert.Equal(t, int32(2), r[1][0].(int32), "replicated id should match")
+		assert.Equal(t, "dump", r[1][1].(string))
+		assert.Equal(t, int32(3), r[2][0].(int32), "replicated id should match")
+		assert.Equal(t, "insert", r[2][1].(string))
+		assert.Equal(t, int32(4), r[3][0].(int32), "replicated id should match")
+		assert.Equal(t, "insert", r[3][1].(string))
+
+		stopReplication()
+		*Config.Rewind = true
+
+		ctx, stopReplication = context.WithCancel(context.Background())
+		go startSync(ctx)
+
+		time.Sleep(100 * time.Millisecond)
+
+		// it doesn't write any new rows
+		getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 4)
+
+		stopReplication()
 	})
 }

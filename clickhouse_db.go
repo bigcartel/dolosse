@@ -24,7 +24,7 @@ const eventIdColumnName = "changelog_id"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
-		Addr:        []string{*clickhouseAddr},
+		Addr:        []string{*Config.ClickhouseAddr},
 		Compression: &clickhouse.Compression{Method: clickhouse.CompressionLZ4, Level: 1},
 		Settings: clickhouse.Settings{
 			"max_execution_time":             60,
@@ -129,23 +129,18 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end
 	return len(duplicates) > 0, duplicatesMap
 }
 
-func (db *ClickhouseDb) Setup() {
-	ctx := context.Background()
-	err := db.conn.Exec(ctx, fmt.Sprintf("create database if not exists %s", *clickhouseDb))
+func (db *ClickhouseDb) Setup(ctx context.Context) {
+	must(db.conn.Exec(ctx, fmt.Sprintf("create database if not exists %s", *Config.ClickhouseDb)))
 
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = db.conn.Exec(ctx, fmt.Sprintf(`
+	must(db.conn.Exec(ctx, fmt.Sprintf(`
 		create table if not exists %s.binlog_sync_state (
 			key String,
 			value String
-	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, *clickhouseDb))
+	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, *Config.ClickhouseDb)))
+}
 
-	if err != nil {
-		log.Fatal(err)
-	}
+func (db *ClickhouseDb) ClearReplicationState(ctx context.Context) {
+	must(db.conn.Exec(ctx, fmt.Sprintf("drop database if exists %s", *Config.ClickhouseDb)))
 }
 
 // unfortunately we can't get reflect types when querying all tables at once
@@ -175,7 +170,7 @@ func (db *ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
 
 func (db *ClickhouseDb) getColumnMap() ChColumnMap {
 	rows := unwrap(db.conn.Query(context.Background(),
-		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, *clickhouseDb)))
+		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, *Config.ClickhouseDb)))
 
 	columns := make(ChColumnMap, 0)
 
@@ -262,7 +257,7 @@ type ClickhouseQueryColumn struct {
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
 func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMap) {
-	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, *clickhouseDb, table)
+	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, *Config.ClickhouseDb, table)
 	rows, err := db.conn.Query(context.Background(), queryString)
 
 	if err != nil {
@@ -343,7 +338,7 @@ func (db *ClickhouseDb) GetStateString(key string) string {
 
 	err := db.conn.Select(context.Background(),
 		&rows,
-		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *clickhouseDb),
+		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *Config.ClickhouseDb),
 		gtidSetKey)
 
 	if err != nil {
@@ -360,7 +355,7 @@ func (db *ClickhouseDb) GetStateString(key string) string {
 
 func (db *ClickhouseDb) SetStateString(key, value string) {
 	err := db.conn.Exec(context.Background(),
-		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", *clickhouseDb),
+		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", *Config.ClickhouseDb),
 		key,
 		value)
 

@@ -13,6 +13,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/replication"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"github.com/siddontang/go-log/log"
 )
 
@@ -52,14 +53,14 @@ func updateReplicationDelay(eventTime uint32) {
 
 type PerSecondEventCountMap = map[uint64]uint32
 
-func startReplication(gtidSet mysql.GTIDSet) {
+func startReplication(ctx context.Context, gtidSet mysql.GTIDSet) error {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
 		HeartbeatPeriod: 60 * time.Second,
 		Flavor:          "mysql",
-		Host:            *mysqlAddr,
-		User:            *mysqlUser,
-		Password:        *mysqlPassword,
+		Host:            *Config.MysqlAddr,
+		User:            *Config.MysqlUser,
+		Password:        *Config.MysqlPassword,
 		UseDecimal:      false,
 		ParseTime:       false,
 	}
@@ -72,7 +73,7 @@ func startReplication(gtidSet mysql.GTIDSet) {
 	streamer, err := syncer.StartSyncGTID(gtidSet)
 	must(err)
 
-	must(withMysqlConnection(func(conn *client.Conn) error {
+	return withMysqlConnection(func(conn *client.Conn) error {
 		var action string
 		var serverUuid string
 		var gtidEventCount uint32
@@ -81,8 +82,11 @@ func startReplication(gtidSet mysql.GTIDSet) {
 		var txnCommitTime time.Time
 
 		for {
-			ev, err := streamer.GetEvent(context.Background())
-			must(err)
+			ev, err := streamer.GetEvent(ctx)
+			if err != nil {
+				return err
+			}
+			log.Infoln(ev.Header.EventType.String())
 
 			// This is a partial copy of
 			// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133
@@ -103,7 +107,7 @@ func startReplication(gtidSet mysql.GTIDSet) {
 					rawEventSid = e.SID
 					sid, err := uuid.FromBytes(rawEventSid)
 					if err != nil {
-						log.Panicln("failed parsing GTID event server UUID ", err)
+						return errors.Wrap(err, "failed parsing GTID event server UUID")
 					}
 
 					serverUuid = sid.String()
@@ -113,7 +117,7 @@ func startReplication(gtidSet mysql.GTIDSet) {
 				// - if an alter table is detected clear the mysql table cache used to decode events
 				// log.Infoln(string(e.Query))
 			case *replication.RowsEvent:
-				if !bytes.Equal(e.Table.Schema, mysqlDbByte) {
+				if !bytes.Equal(e.Table.Schema, Config.MysqlDbByte) {
 					continue
 				}
 
@@ -158,5 +162,5 @@ func startReplication(gtidSet mysql.GTIDSet) {
 
 			updateReplicationDelay(ev.Header.Timestamp)
 		}
-	}))
+	})
 }
