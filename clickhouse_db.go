@@ -66,7 +66,7 @@ func (db *ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 		vars := makeVarsForRow()
 
 		if err := rows.Scan(vars...); err != nil {
-			checkErr(err)
+			must(err)
 		}
 
 		for i, v := range vars {
@@ -174,22 +174,14 @@ func (db *ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
 }
 
 func (db *ClickhouseDb) getColumnMap() ChColumnMap {
-	rows, err := db.conn.Query(context.Background(),
-		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, *clickhouseDb))
-
-	if err != nil {
-		log.Panicln(err)
-	}
+	rows := unwrap(db.conn.Query(context.Background(),
+		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, *clickhouseDb)))
 
 	columns := make(ChColumnMap, 0)
 
 	for rows.Next() {
 		columnInfo := ChColumnInfo{}
-		err := rows.ScanStruct(&columnInfo)
-
-		if err != nil {
-			log.Panicln(err)
-		}
+		must(rows.ScanStruct(&columnInfo))
 
 		tableName := columnInfo.Table
 

@@ -39,17 +39,17 @@ func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn Cli
 }
 
 func checkMysqlResults(_ *mysql.Result, err error) {
-	checkErr(err)
+	must(err)
 }
 
 func execMysqlStatements(mysqlConn *client.Conn, statements string) {
-	mysqlConn.ExecuteMultiple(statements, checkMysqlResults)
+	unwrap(mysqlConn.ExecuteMultiple(statements, checkMysqlResults))
 }
 
 func execChStatements(chDb ClickhouseDb, statements ...string) {
 	for i := range statements {
 		err := chDb.conn.Exec(context.TODO(), statements[i])
-		checkErr(err)
+		must(err)
 	}
 }
 
@@ -123,6 +123,8 @@ func TestBasicReplication(t *testing.T) {
 
 		go startSync()
 
+		// TODO this breaks now because the dump kicks off before any replication happens, so there's always a dump duplicate
+		// I think I need to make it so that if you explicitly set a starting gtid it doesn't auto-dump.
 		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 2)
 
 		if len(r) > 2 {

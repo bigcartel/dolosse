@@ -19,10 +19,10 @@ func boomFilterStateFile(truncate bool) *os.File {
 	}
 
 	path, err := os.Getwd()
-	checkErr(err)
+	must(err)
 
 	f, err := os.OpenFile(path+"/duplicates_state", fArgs, 0600)
-	checkErr(err)
+	must(err)
 
 	return f
 }
@@ -32,7 +32,7 @@ func readBloomFilterState() {
 	defer f.Close()
 
 	fi, err := f.Stat()
-	checkErr(err)
+	must(err)
 	if fi.Size() > 0 {
 		bytes, err := batchDuplicatesFilter.ImportElementsFrom(f)
 		if err != nil {
@@ -40,7 +40,7 @@ func readBloomFilterState() {
 				log.Infoln("local deduplication state was corrupted, skipping")
 				return
 			} else {
-				checkErr(err)
+				must(err)
 			}
 		}
 
@@ -53,6 +53,6 @@ func writeBloomFilterState() {
 	defer f.Close()
 
 	bytes, err := batchDuplicatesFilter.WriteTo(f)
-	checkErr(err)
+	must(err)
 	log.Infof("Wrote %d bytes to %s", bytes, f.Name())
 }

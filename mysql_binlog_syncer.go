@@ -70,9 +70,9 @@ func startReplication(gtidSet mysql.GTIDSet) {
 	syncer := replication.NewBinlogSyncer(cfg)
 
 	streamer, err := syncer.StartSyncGTID(gtidSet)
-	checkErr(err)
+	must(err)
 
-	checkErr(withMysqlConnection(func(conn *client.Conn) error {
+	must(withMysqlConnection(func(conn *client.Conn) error {
 		var action string
 		var serverUuid string
 		var gtidEventCount uint32
@@ -82,7 +82,7 @@ func startReplication(gtidSet mysql.GTIDSet) {
 
 		for {
 			ev, err := streamer.GetEvent(context.Background())
-			checkErr(err)
+			must(err)
 
 			// This is a partial copy of
 			// https://github.com/go-mysql-org/go-mysql/blob/master/canal/sync.go#L133
@@ -105,6 +105,7 @@ func startReplication(gtidSet mysql.GTIDSet) {
 					if err != nil {
 						log.Panicln("failed parsing GTID event server UUID ", err)
 					}
+
 					serverUuid = sid.String()
 				}
 			case *replication.QueryEvent:
@@ -114,6 +115,11 @@ func startReplication(gtidSet mysql.GTIDSet) {
 			case *replication.RowsEvent:
 				if !bytes.Equal(e.Table.Schema, mysqlDbByte) {
 					continue
+				}
+
+				// FIGURE THIS OUT if it's possible - might not be
+				for _, c := range e.Table.ColumnName {
+					log.Infoln(string(c))
 				}
 
 				// TODO make cachedChColumnsForTable support []byte so it doesn't need extra allocations

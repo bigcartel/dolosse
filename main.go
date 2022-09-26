@@ -140,12 +140,6 @@ func incrementStat(counter *uint64) {
 	atomic.AddUint64(counter, 1)
 }
 
-func checkErr(err error) {
-	if err != nil {
-		log.Panicln(err)
-	}
-}
-
 func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
 	columns := chColumns.Get(table)
 	return columns, (columns != nil && len(columns.columns) > 0)
@@ -403,10 +397,8 @@ func commaSeparatedColumnNames(columns []ClickhouseQueryColumn) string {
 }
 
 func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchColumnArrays ClickhouseBatchColumns, chColumns []ClickhouseQueryColumn) {
-	batch, err := clickhouseDb.conn.PrepareBatch(context.Background(),
-		fmt.Sprintf("INSERT INTO %s (%s)", tableWithDb, commaSeparatedColumnNames(chColumns)))
-
-	checkErr(err)
+	batch := unwrap(clickhouseDb.conn.PrepareBatch(context.Background(),
+		fmt.Sprintf("INSERT INTO %s (%s)", tableWithDb, commaSeparatedColumnNames(chColumns))))
 
 	for i, col := range batchColumnArrays {
 		err := batch.Column(i).Append(col)
@@ -415,7 +407,7 @@ func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchCol
 		}
 	}
 
-	err = batch.Send()
+	err := batch.Send()
 	if err != nil {
 		log.Panic(err, tableWithDb)
 	}
@@ -472,8 +464,7 @@ func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 }
 
 func batchWrite() {
-	clickhouseDb, err := establishClickhouseConnection()
-	checkErr(err)
+	clickhouseDb := unwrap(establishClickhouseConnection())
 
 	eventsByTable := make(EventsByTable)
 	var lastGtidSet string
@@ -576,8 +567,7 @@ func parseFlags(args []string) {
 }
 
 func startSync() {
-	clickhouseDb, err := establishClickhouseConnection()
-	checkErr(err)
+	clickhouseDb := unwrap(establishClickhouseConnection())
 	clickhouseDb.Setup()
 	initMysqlConnectionPool()
 
@@ -585,7 +575,7 @@ func startSync() {
 	// and that clickhouse tables have event_created_at DateTime, id same_as_mysql, action string
 	// use the clickhouse mysql table function with the credentials provided to this command
 	// to do it using clickhouse translated types for max compat
-	clickhouseDb.CheckSchema()
+	must(clickhouseDb.CheckSchema())
 
 	syncChColumns(clickhouseDb)
 

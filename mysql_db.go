@@ -32,7 +32,7 @@ func getEarliestGtidStartPoint() string {
 
 func getMysqlVariable(conn *client.Conn, variable string) string {
 	rr, err := conn.Execute("select " + variable)
-	checkErr(err)
+	must(err)
 
 	return string(rr.Values[0][0].AsString())
 }
@@ -64,7 +64,7 @@ func getMysqlTable(db, table string) *schema.Table {
 	} else {
 		return withMysqlConnection(func(conn *client.Conn) *schema.Table {
 			t, err := schema.NewTable(conn, db, table)
-			checkErr(err)
+			must(err)
 			mysqlColumns.Set(table, &t)
 			return t
 		})
@@ -81,7 +81,7 @@ func initMysqlConnectionPool() {
 func withMysqlConnection[T any](f func(c *client.Conn) T) T {
 	conn, err := mysqlPool.GetConn(context.Background())
 	defer mysqlPool.PutConn(conn)
-	checkErr(err)
+	must(err)
 	rv := f(conn)
 	return rv
 }
@@ -134,7 +134,7 @@ func copyDumpStringValues(val *mysql.FieldValue) interface{} {
 
 // TODO write some tests for this?
 func dumpTable(dbName, tableName string) {
-	checkErr(withMysqlConnection(func(conn *client.Conn) error {
+	must(withMysqlConnection(func(conn *client.Conn) error {
 		var result mysql.Result
 		return conn.ExecuteSelectStreaming("SELECT * FROM "+dbName+"."+tableName, &result, func(row []mysql.FieldValue) error {
 			values := make([]interface{}, len(row))

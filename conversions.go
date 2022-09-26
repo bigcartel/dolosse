@@ -68,7 +68,7 @@ func parseString(value string, tableName string, columnName string) interface{} 
 		}
 
 		out, err = json.Marshal(y)
-		checkErr(err)
+		must(err)
 	} else {
 		out = anonymizeValue(value, tableName, columnName)
 	}
@@ -85,7 +85,7 @@ func convertMysqlColumnType(value interface{}, columnType int) interface{} {
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
 			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
-			checkErr(err)
+			must(err)
 			return vt
 		} else {
 			return value
@@ -94,7 +94,7 @@ func convertMysqlColumnType(value interface{}, columnType int) interface{} {
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
 			vt, err := time.Parse("2006-01-02", vs)
-			checkErr(err)
+			must(err)
 			return vt
 		} else {
 			return value
@@ -103,7 +103,7 @@ func convertMysqlColumnType(value interface{}, columnType int) interface{} {
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
 			val, err := decimal.NewFromString(vs)
-			checkErr(err)
+			must(err)
 			return val
 		} else {
 			return vs
