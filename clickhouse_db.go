@@ -24,7 +24,12 @@ const eventIdColumnName = "changelog_id"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
-		Addr:        []string{*Config.ClickhouseAddr},
+		Addr: []string{*Config.ClickhouseAddr},
+		Auth: clickhouse.Auth{
+			Database: *Config.ClickhouseDb,
+			Username: *Config.ClickhouseUsername,
+			Password: *Config.ClickhousePassword,
+		},
 		Compression: &clickhouse.Compression{Method: clickhouse.CompressionLZ4, Level: 1},
 		Settings: clickhouse.Settings{
 			"max_execution_time":             60,
