@@ -50,6 +50,7 @@ func makeColumnSet() *ChColumnSet {
 }
 
 func TestEventToClickhouseRowData(t *testing.T) {
+	Config.YamlColumns = []string{"test_table.yaml_column"}
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
@@ -77,6 +78,8 @@ func TestEventToClickhouseRowData(t *testing.T) {
 }
 
 func TestParseBadYaml(t *testing.T) {
+	Config.ParseFlags([]string{}, true)
+
 	yaml := `---
 :primary_font: Abril Fatface
 :background_color: "#FEFEFE"
@@ -319,7 +322,7 @@ shipping:
   tracking_number:
 `
 
-	yamlColumns = append(yamlColumns, "test_table.yaml_column")
+	Config.YamlColumns = []string{"test_table.yaml_column"}
 	columns := &ChColumnSet{
 		columns: []ClickhouseQueryColumn{
 			{
@@ -364,6 +367,7 @@ shipping:
 }
 
 func BenchmarkEventToClickhouseRowData(b *testing.B) {
+	Config.YamlColumns = []string{"test_table.yaml_column"}
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
@@ -373,6 +377,7 @@ func BenchmarkEventToClickhouseRowData(b *testing.B) {
 }
 
 func TestParseValueUint8Array(t *testing.T) {
+	Config.YamlColumns = []string{"test_table.yaml_column"}
 	outValue := "test string"
 	inValue := []uint8(outValue)
 	parsedValue := parseValue(inValue, schema.TYPE_STRING, "table", "column")
@@ -382,6 +387,8 @@ func TestParseValueUint8Array(t *testing.T) {
 }
 
 func TestParseConvertAndAnonymizeYaml(t *testing.T) {
+	Config.YamlColumns = []string{"test_table.yaml_column"}
+	Config.AnonymizeFields = []string{"email", "password"}
 	password := "test"
 	email := "max@test.com"
 	firstName := "max"
@@ -403,7 +410,7 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 		Firstname string `json:"firstname"`
 	}{}
 
-	err = json.Unmarshal(parseValue(string(yamlString), schema.TYPE_STRING, "order_transactions", "params").([]byte), &out)
+	err = json.Unmarshal(parseValue(string(yamlString), schema.TYPE_STRING, "test_table", "yaml_column").([]byte), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -426,6 +433,7 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 }
 
 func TestAnonymizeStringValue(t *testing.T) {
+	Config.YamlColumns = []string{"test_table.yaml_column"}
 	password := "test"
 	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
 	if out == password {
@@ -434,6 +442,7 @@ func TestAnonymizeStringValue(t *testing.T) {
 }
 
 func TestAnonymizeByteSlice(t *testing.T) {
+	Config.YamlColumns = []string{"test_table.yaml_column"}
 	password := []byte("test")
 	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
 

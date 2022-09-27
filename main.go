@@ -492,7 +492,7 @@ func startSync() {
 }
 
 func main() {
-	Config.ParseFlags(os.Args[1:])
+	Config.ParseFlags(os.Args[1:], false)
 	initState(false)
 
 	var p *profile.Profile

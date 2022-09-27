@@ -17,38 +17,12 @@ import (
 	"github.com/siddontang/go-log/log"
 )
 
-// could instead be comma separate list of table.column paths provided via CLI.
-// Could also infer and attempt to parse if the destination column is JSON type.
-// TODO either move to config or infer from string text if a config is set to true?
-// Could this also work with json columns/ruby serialized columns in a generic way?
-// TODO make this the same as anonymizeFields - just a path string
-var yamlColumns = []string{
-	"theme_instances.settings",
-	"theme_instances.image_sort_order",
-	"order_transactions.params",
-}
-
-// TODO make this a configurable arg of comma separated strings
-var anonymizeFields = []string{
-	"address",
-	"street",
-	"secret",
-	"postal",
-	"line1",
-	"line2",
-	"password",
-	"salt",
-	"email",
-	"longitude",
-	"latitude",
-	"payment_methods.properties",
-}
-
 var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
 
 func parseString(value string, tableName string, columnName string) interface{} {
 	var out interface{}
 
+	log.Infoln(Config.YamlColumns)
 	if isYamlColumn(tableName, columnName) {
 		y := make(map[string]interface{})
 
@@ -137,11 +111,11 @@ func stringInSlice(s string, slice []string) bool {
 }
 
 func isAnonymizedField(s string) bool {
-	return stringInSlice(s, anonymizeFields)
+	return stringInSlice(s, Config.AnonymizeFields)
 }
 
 func isYamlColumn(tableName string, columnName string) bool {
-	return stringInSlice(fmt.Sprintf("%s.%s", tableName, columnName), yamlColumns)
+	return stringInSlice(fmt.Sprintf("%s.%s", tableName, columnName), Config.YamlColumns)
 }
 
 func fieldString(table string, columnPath string) string {

@@ -27,15 +27,13 @@ type GlobalConfig struct {
 	Rewind,
 	RunProfile *bool
 
-	IgnoredColumnsForDeduplication []string
-
-	flagsParsed bool
+	IgnoredColumnsForDeduplication,
+	AnonymizeFields,
+	YamlColumns []string
 }
 
-func (c *GlobalConfig) ParseFlags(args []string) {
-	if c.flagsParsed {
-		return
-	}
+func (c *GlobalConfig) ParseFlags(args []string, force bool) {
+	*c = GlobalConfig{}
 
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
 	// TODO add description talking about assumption and limitations.
@@ -59,8 +57,12 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.ClickhousePassword = fs.String("clickhouse-password", "", "Clickhouse password (also available via CLICKHOUSE_PASSWORD)")
 	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Second, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
+	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
+	AnonymizeFields := fs.String("anonymize-fields", "address,street,secret,postal,line1,line2,password,salt,email,longitude,latitude,payment_methods.properties", "Comma separated list of field names to anonymize. The match is fuzzy - so secret will match encrypted_secret. a dot in the field represents a subfield in a yaml/json column. so payment_methods.properties will anonymize the properties field in the payment_methods json object.")
 
 	c.IgnoredColumnsForDeduplication = strings.Split(*IgnoredColumnsForDeduplication, ",")
+	c.YamlColumns = strings.Split(*YamlColumns, ",")
+	c.AnonymizeFields = strings.Split(*AnonymizeFields, ",")
 
 	// TODO make various global configs cli args for different workloads
 
@@ -70,8 +72,6 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	))
 
 	c.MysqlDbByte = []byte(*Config.MysqlDb)
-
-	c.flagsParsed = true
 }
 
 var Config = GlobalConfig{}
