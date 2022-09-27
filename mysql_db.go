@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -12,10 +11,6 @@ import (
 
 	_ "github.com/go-mysql-org/go-mysql/driver"
 )
-
-var mysqlPoolInitialized = false
-var mysqlPool *client.Pool
-var mysqlColumns = NewConcurrentMap[*schema.Table]()
 
 func getEarliestGtidStartPoint() string {
 	return withMysqlConnection(func(conn *client.Conn) string {
@@ -57,7 +52,7 @@ func getMysqlTableNames() []string {
 // lazy load instead of doing a scheduled load at a particular time?
 // TODO this needs to be reset as well on alter tables
 func getMysqlTable(db, table string) *schema.Table {
-	v := mysqlColumns.Get(table)
+	v := State.mysqlColumns.Get(table)
 
 	if v != nil {
 		return *v
@@ -65,37 +60,27 @@ func getMysqlTable(db, table string) *schema.Table {
 		return withMysqlConnection(func(conn *client.Conn) *schema.Table {
 			t, err := schema.NewTable(conn, db, table)
 			must(err)
-			mysqlColumns.Set(table, &t)
+			State.mysqlColumns.Set(table, &t)
 			return t
 		})
 	}
 }
 
-func initMysqlConnectionPool() {
-	if !mysqlPoolInitialized {
-		mysqlPool = client.NewPool(log.Debugf, 10, 20, 5, *Config.MysqlAddr, *Config.MysqlUser, *Config.MysqlPassword, *Config.MysqlDb)
-		mysqlPoolInitialized = true
-	}
-}
-
 func withMysqlConnection[T any](f func(c *client.Conn) T) T {
-	conn, err := mysqlPool.GetConn(context.Background())
-	defer mysqlPool.PutConn(conn)
-	must(err)
-	rv := f(conn)
-	return rv
+	// TODO fix use of context.Background here -should use shared context
+	// might fix the need for context in the query streaming code
+	conn := unwrap(State.mysqlPool.GetConn(State.ctx))
+	defer State.mysqlPool.PutConn(conn)
+	return f(conn)
 }
-
-var dumpingTables = NewConcurrentMap[struct{}]()
 
 func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 	var wg sync.WaitGroup
 	working := make(chan bool, concurrentMysqlDumpSelects)
 
-	// TODO paralellize with either worker or waitgroup pattern.
-	for table := range *chColumns.m {
-		if dumpingTables.Get(table) == nil && !chConn.GetTableDumped(table) || forceDump {
-			dumpingTables.Set(table, &struct{}{})
+	for table := range *State.chColumns.m.m {
+		if State.dumpingTables.Get(table) == nil && !chConn.GetTableDumped(table) || forceDump {
+			State.dumpingTables.Set(table, &struct{}{})
 			chConn.SetTableDumped(table, false) // reset if force dump
 
 			wg.Add(1)
@@ -111,12 +96,7 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 
 	wg.Wait()
 
-	dumped.Store(true)
-}
-
-type DumpFieldVal interface {
-	AsString() []byte
-	Value() interface{}
+	State.dumped.Store(true)
 }
 
 // We copy these because each val passed in is using a shared and re-used buffer
@@ -130,9 +110,8 @@ func copyDumpStringValues(val *mysql.FieldValue) interface{} {
 	}
 }
 
-// TODO write some tests for this?
-func dumpTable(dbName, tableName string) {
-	must(withMysqlConnection(func(conn *client.Conn) error {
+func dumpTable(dbName, tableName string) error {
+	return withMysqlConnection(func(conn *client.Conn) error {
 		var result mysql.Result
 		return conn.ExecuteSelectStreaming("SELECT * FROM "+dbName+"."+tableName, &result, func(row []mysql.FieldValue) error {
 			values := make([]interface{}, len(row))
@@ -145,11 +124,11 @@ func dumpTable(dbName, tableName string) {
 
 			return nil
 		}, nil)
-	}))
+	})
 }
 
 func processDumpData(dbName string, tableName string, values []interface{}) {
-	_, hasColumns := cachedChColumnsForTable(tableName)
+	_, hasColumns := State.chColumns.ColumnsForTable(tableName)
 	if !hasColumns {
 		return
 	}

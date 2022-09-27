@@ -21,12 +21,13 @@ type ClickhouseDb struct {
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const actionColumnName = "changelog_action"
 const eventIdColumnName = "changelog_id"
+const gtidSetKey = "last_synced_gtid_set"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
 		Addr: []string{*Config.ClickhouseAddr},
 		Auth: clickhouse.Auth{
-			Database: *Config.ClickhouseDb,
+			Database: "default",
 			Username: *Config.ClickhouseUsername,
 			Password: *Config.ClickhousePassword,
 		},
@@ -43,7 +44,7 @@ func establishClickhouseConnection() (ClickhouseDb, error) {
 }
 
 func (db *ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
-	rows, err := db.conn.Query(context.Background(), q, args...)
+	rows, err := db.conn.Query(State.ctx, q, args...)
 	if err != nil {
 		log.Panicln(err, q, args)
 	}
@@ -134,18 +135,14 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end
 	return len(duplicates) > 0, duplicatesMap
 }
 
-func (db *ClickhouseDb) Setup(ctx context.Context) {
-	must(db.conn.Exec(ctx, fmt.Sprintf("create database if not exists %s", *Config.ClickhouseDb)))
+func (db *ClickhouseDb) Setup() {
+	must(db.conn.Exec(State.ctx, fmt.Sprintf("create database if not exists %s", *Config.ClickhouseDb)))
 
-	must(db.conn.Exec(ctx, fmt.Sprintf(`
+	must(db.conn.Exec(State.ctx, fmt.Sprintf(`
 		create table if not exists %s.binlog_sync_state (
 			key String,
 			value String
 	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, *Config.ClickhouseDb)))
-}
-
-func (db *ClickhouseDb) ClearReplicationState(ctx context.Context) {
-	must(db.conn.Exec(ctx, fmt.Sprintf("drop table if exists %s.binlog_sync_state", *Config.ClickhouseDb)))
 }
 
 // unfortunately we can't get reflect types when querying all tables at once
@@ -292,8 +289,6 @@ func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMa
 	return columns, columnNameLookup
 }
 
-var gtidSetKey string = "last_synced_gtid_set"
-
 func (db *ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 	gtidString := db.GetStateString(gtidSetKey)
 
@@ -341,14 +336,10 @@ func (db *ClickhouseDb) GetStateString(key string) string {
 
 	var rows []storedKeyValue
 
-	err := db.conn.Select(context.Background(),
+	must(db.conn.Select(context.Background(),
 		&rows,
 		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *Config.ClickhouseDb),
-		key)
-
-	if err != nil {
-		log.Fatal(err)
-	}
+		key))
 
 	value := ""
 	if len(rows) > 0 {

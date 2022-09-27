@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -21,31 +20,9 @@ import (
 	"github.com/siddontang/go-log/log"
 )
 
-type ChColumnSet struct {
-	columns      []ClickhouseQueryColumn
-	columnLookup LookupMap
-}
-
-// TODO if columns are stale and we get an error the processed data for the batch would need to
-// be re-processed or we just restart replication from last gtid set? Maybe that's the move -
-// if it fails due to a schema change just restart from a known good point. Fail early and retry Erlang style.
-var chColumns = NewConcurrentMap[ChColumnSet]()
-
 const batchSize = 100000
 const concurrentBatchWrites = 10
 const concurrentMysqlDumpSelects = 10
-
-var processRowsChannel = make(chan *MysqlReplicationRowEvent, batchSize)
-var batchWriteChannel = make(chan *RowInsertData, batchSize)
-var latestProcessingGtid = make(chan string)
-var deliveredRows = new(uint64)
-var enqueuedRows = new(uint64)
-var processedRows = new(uint64)
-var skippedRowLevelDuplicates = new(uint64)
-var skippedLocallyFilterDuplicates = new(uint64)
-var skippedPersistedDuplicates = new(uint64)
-var skippedDumpDuplicates = new(uint64)
-var dumped = atomic.Bool{}
 
 type LookupMap map[string]bool
 
@@ -79,84 +56,45 @@ var RowInsertDataPool = sync.Pool{
 	},
 }
 
-type EventsByTable map[string]*[]*RowInsertData
-
-func (es *EventsByTable) Reset() {
-	for k, vSlice := range *es {
-		for _, v := range *vSlice {
-			RowInsertDataPool.Put(v)
-		}
-		newSlice := (*vSlice)[:0]
-		(*es)[k] = &newSlice
-	}
-}
-
-func syncChColumns(clickhouseDb ClickhouseDb) {
-	existingClickhouseTables := clickhouseDb.ColumnsForMysqlTables()
-
-	for table := range existingClickhouseTables {
-		cols, lookup := clickhouseDb.Columns(table)
-
-		chColumns.Set(table, &ChColumnSet{
-			columns:      cols,
-			columnLookup: lookup,
-		})
-	}
-}
-
-func printStats() {
-	log.Infoln(*processedRows, "processed rows")
-	log.Infoln(*enqueuedRows, "enqueued rows")
-	log.Infoln(*deliveredRows, "delivered rows")
-	log.Infoln(*skippedRowLevelDuplicates, "skipped row level duplicate rows")
-	log.Infoln(*skippedLocallyFilterDuplicates, "skipped locally filtered duplicate rows")
-	log.Infoln(*skippedPersistedDuplicates, "skipped persisted duplicate rows")
-	log.Infoln(*skippedDumpDuplicates, "skipped dump duplicate rows")
-}
-
-func incrementStat(counter *uint64) {
-	atomic.AddUint64(counter, 1)
-}
-
-func cachedChColumnsForTable(table string) (*ChColumnSet, bool) {
-	columns := chColumns.Get(table)
-	return columns, (columns != nil && len(columns.columns) > 0)
-}
-
 func gtidRangeString(sid string, gtid int64) string {
 	return sid + ":1-" + strconv.FormatInt(gtid, 10)
 }
 
 func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *RowInsertData) {
-	for event := range input {
-		if event.Action != "dump" && event.ServerId != "" {
-			latestProcessingGtid <- gtidRangeString(event.ServerId, event.Gtid)
+	for {
+		select {
+		case <-State.ctx.Done():
+			return
+		case event := <-input:
+			if event.Action != "dump" && event.ServerId != "" {
+				State.latestProcessingGtid <- gtidRangeString(event.ServerId, event.Gtid)
+			}
+
+			columns, hasColumns := State.chColumns.ColumnsForTable(event.Table.Name)
+
+			if !hasColumns {
+				Stats.IncrementProcessed()
+				continue
+			}
+
+			insertData, isDup := eventToClickhouseRowData(event, columns)
+
+			if isDup {
+				Stats.IncrementSkippedRowLevelDuplicates()
+			} else if event.Action != "dump" && State.batchDuplicatesFilter.TestAndAdd(event.EventId()) {
+				Stats.IncrementSkippedLocallyFilteredDuplicates()
+			} else {
+				output <- insertData
+			}
+
+			Stats.IncrementProcessed()
 		}
-
-		columns, hasColumns := cachedChColumnsForTable(event.Table.Name)
-
-		if !hasColumns {
-			incrementStat(processedRows)
-			continue
-		}
-
-		insertData, isDup := eventToClickhouseRowData(event, columns)
-
-		if isDup {
-			incrementStat(skippedRowLevelDuplicates)
-		} else if event.Action != "dump" && batchDuplicatesFilter.TestAndAdd([]byte(event.EventId())) {
-			incrementStat(skippedLocallyFilterDuplicates)
-		} else {
-			output <- insertData
-		}
-
-		incrementStat(processedRows)
 	}
 }
 
 func startProcessEventsWorkers() {
 	for i := 0; i < runtime.NumCPU(); i++ {
-		go processEventWorker(processRowsChannel, batchWriteChannel)
+		go processEventWorker(State.processRows, State.batchWrite)
 	}
 }
 
@@ -232,43 +170,12 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 }
 
 func OnRow(e *MysqlReplicationRowEvent) {
-	processRowsChannel <- e
-	incrementStat(enqueuedRows)
+	State.processRows <- e
+	Stats.IncrementEnqueued()
 }
 
 func tableWithDb(table string) string {
 	return fmt.Sprintf("%s.%s", *Config.ClickhouseDb, table)
-}
-
-func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
-	syncChColumns(clickhouseDb)
-
-	var wg sync.WaitGroup
-	working := make(chan bool, concurrentBatchWrites)
-
-	for table, rows := range eventsByTable {
-		_, hasColumns := cachedChColumnsForTable(table)
-		if !hasColumns {
-			continue
-		}
-
-		wg.Add(1)
-
-		go func(table string, rows *[]*RowInsertData) {
-			working <- true
-			deliverBatchForTable(clickhouseDb, table, rows)
-			<-working
-			wg.Done()
-		}(table, rows)
-	}
-
-	wg.Wait()
-
-	if lastGtidSet != "" {
-		clickhouseDb.SetGTIDString(lastGtidSet)
-	}
-
-	writeBloomFilterState(clickhouseDb)
 }
 
 func logNoRows(table string) {
@@ -276,8 +183,9 @@ func logNoRows(table string) {
 }
 
 func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowInsertData) {
-	columns := chColumns.Get(table)
-	if columns == nil {
+	columns, hasColumns := State.chColumns.ColumnsForTable(table)
+
+	if !hasColumns {
 		log.Infoln("No columns in clickhouse found for", table)
 		return
 	}
@@ -300,7 +208,7 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowI
 
 	sendClickhouseBatch(clickhouseDb, tableWithDb, batchColumnArrays, columns.columns)
 
-	atomic.AddUint64(deliveredRows, uint64(writeCount))
+	Stats.AddDelivered(uint64(writeCount))
 
 	log.Infoln("batch sent for", tableWithDb)
 }
@@ -327,7 +235,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 
 	for _, rowInsertData := range *processedRows {
 		if hasDuplicates && duplicatesMap[rowInsertData.EventId] {
-			incrementStat(skippedPersistedDuplicates)
+			Stats.IncrementSkippedPersistedDuplicates()
 			continue
 		}
 
@@ -336,7 +244,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 		}
 
 		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap[rowInsertData.Id] {
-			incrementStat(skippedDumpDuplicates)
+			Stats.IncrementSkippedDumpDuplicates()
 			continue
 		}
 
@@ -441,6 +349,18 @@ func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 	}
 }
 
+type EventsByTable map[string]*[]*RowInsertData
+
+func (es *EventsByTable) Reset() {
+	for k, vSlice := range *es {
+		for _, v := range *vSlice {
+			RowInsertDataPool.Put(v)
+		}
+		newSlice := (*vSlice)[:0]
+		(*es)[k] = &newSlice
+	}
+}
+
 func batchWrite() {
 	clickhouseDb := unwrap(establishClickhouseConnection())
 
@@ -457,16 +377,16 @@ func batchWrite() {
 	resetCountAndTimer()
 
 	deliver := func() {
-		delay := replicationDelay.Load()
 		// Could also get delay by peeking events periodicially to avoid computing it
+		delay := replicationDelay.Load()
 		log.Infoln("replication delay is", delay, "seconds")
 
 		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
 		eventsByTable.Reset()
-		printStats()
+		Stats.Print()
 		resetCountAndTimer()
 
-		if !dumped.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
+		if !State.dumped.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
 			go DumpMysqlDb(&clickhouseDb, *Config.Dump || *Config.DumpImmediately)
 			log.Infoln("Started mysql db dump")
 		}
@@ -474,15 +394,18 @@ func batchWrite() {
 
 	for {
 		select {
+		case <-State.ctx.Done():
+			log.Infoln("Closing...")
+			return
 		case <-timer.C:
 			if counter > 0 {
 				deliver()
 			} else {
 				resetCountAndTimer()
 			}
-		case gtid := <-latestProcessingGtid:
+		case gtid := <-State.latestProcessingGtid:
 			lastGtidSet = gtid
-		case e := <-batchWriteChannel:
+		case e := <-State.batchWrite:
 			if eventsByTable[e.EventTable] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
@@ -502,20 +425,43 @@ func batchWrite() {
 	}
 }
 
-func startSync(ctx context.Context) {
-	clickhouseDb := unwrap(establishClickhouseConnection())
-	clickhouseDb.Setup(ctx)
-	readBloomFilterState(clickhouseDb)
-	initMysqlConnectionPool()
+func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
+	State.chColumns.Sync(clickhouseDb)
 
-	// TODO validate all clickhouse table columns are compatible with mysql table columns
-	// and that clickhouse tables have event_created_at DateTime, id same_as_mysql, action string
-	// use the clickhouse mysql table function with the credentials provided to this command
-	// to do it using clickhouse translated types for max compat
-	clickhouseDb.CheckSchema()
+	var wg sync.WaitGroup
+	working := make(chan bool, concurrentBatchWrites)
 
-	syncChColumns(clickhouseDb)
+	for table, rows := range eventsByTable {
+		_, hasColumns := State.chColumns.ColumnsForTable(table)
+		if !hasColumns {
+			continue
+		}
 
+		wg.Add(1)
+
+		go func(table string, rows *[]*RowInsertData) {
+			working <- true
+			deliverBatchForTable(clickhouseDb, table, rows)
+			<-working
+			wg.Done()
+		}(table, rows)
+	}
+
+	wg.Wait()
+
+	if lastGtidSet != "" {
+		clickhouseDb.SetGTIDString(lastGtidSet)
+	}
+
+	go State.batchDuplicatesFilter.writeState(clickhouseDb)
+}
+
+func initState() {
+	Stats.Init()
+	State.Init()
+}
+
+func startSync() {
 	startProcessEventsWorkers()
 	go batchWrite()
 
@@ -523,9 +469,11 @@ func startSync(ctx context.Context) {
 	// should it check a clickhouse table config to determine status?
 	minimumStartingGtid := getEarliestGtidStartPoint()
 
+	clickhouseDb := unwrap(establishClickhouseConnection())
+
 	if *Config.Dump || *Config.DumpImmediately || *Config.Rewind {
 		clickhouseDb.SetGTIDString(minimumStartingGtid)
-		err := startReplication(ctx, clickhouseDb.GetGTIDSet(minimumStartingGtid))
+		err := startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
 		if err != context.Canceled {
 			log.Panicln(err)
 		}
@@ -534,7 +482,7 @@ func startSync(ctx context.Context) {
 			clickhouseDb.SetGTIDString(*Config.StartFromGtid)
 		}
 
-		err := startReplication(ctx, clickhouseDb.GetGTIDSet(minimumStartingGtid))
+		err := startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
 		if err != context.Canceled {
 			log.Panicln(err)
 		}
@@ -543,18 +491,18 @@ func startSync(ctx context.Context) {
 
 func main() {
 	Config.ParseFlags(os.Args[1:])
+	initState()
 
 	var p *profile.Profile
 	if *Config.RunProfile {
 		p = profile.Start(profile.TraceProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
-		cancel()
+		State.cancel()
 		log.Infoln("Exiting...")
 		time.Sleep(2 * time.Second)
 		if *Config.RunProfile && p != nil {
@@ -564,5 +512,5 @@ func main() {
 		os.Exit(1)
 	}()
 
-	startSync(ctx)
+	startSync()
 }

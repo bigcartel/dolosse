@@ -31,8 +31,6 @@ func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn Cli
 	}
 
 	clickhouseConn := unwrap(establishClickhouseConnection())
-	clickhouseConn.ClearReplicationState(context.Background())
-	clickhouseConn.Setup(context.Background())
 
 	f(mysqlConn, clickhouseConn)
 }
@@ -49,6 +47,11 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 	for i := range statements {
 		must(chDb.conn.Exec(context.TODO(), statements[i]))
 	}
+}
+
+func startTestSync() {
+	initState()
+	startSync()
 }
 
 func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount int) [][]interface{} {
@@ -107,7 +110,8 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 			`)
 
 	execChStatements(clickhouseConn,
-		`DROP TABLE IF EXISTS test.test`,
+		`DROP DATABASE IF EXISTS test`,
+		`CREATE DATABASE test`,
 		`CREATE TABLE test.test (
 				id Int32,
 				name String,
@@ -127,8 +131,9 @@ func TestBasicReplication(t *testing.T) {
 	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 		InitDbs(mysqlConn, clickhouseConn)
 
-		ctx, stopReplication := context.WithCancel(context.Background())
-		go startSync(ctx)
+		go startTestSync()
+
+		time.Sleep(100 * time.Millisecond)
 
 		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 2)
 
@@ -138,7 +143,8 @@ func TestBasicReplication(t *testing.T) {
 		assert.Equal(t, "my cool description", **r[0][3].(**string), "replicated description should match")
 		assert.Equal(t, unwrap(decimal.NewFromString("12.33")), r[1][2].(decimal.Decimal), "second replicated price should match")
 
-		stopReplication()
+		State.cancel()
+		time.Sleep(100 * time.Millisecond)
 	})
 }
 
@@ -177,10 +183,9 @@ func TestReplicationAndDump(t *testing.T) {
 			);
 		`)
 
-		ctx, stopReplication := context.WithCancel(context.Background())
-		go startSync(ctx)
+		go startTestSync()
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 
 		r := getChRows(t, clickhouseConn, "select id, changelog_action from test.test order by id asc", 4)
 
@@ -193,17 +198,15 @@ func TestReplicationAndDump(t *testing.T) {
 		assert.Equal(t, int32(4), r[3][0].(int32), "replicated id should match")
 		assert.Equal(t, "insert", r[3][1].(string))
 
-		stopReplication()
+		State.cancel()
 		*Config.Rewind = true
 
-		ctx, stopReplication = context.WithCancel(context.Background())
-		go startSync(ctx)
-
-		time.Sleep(100 * time.Millisecond)
+		go startTestSync()
 
 		// it doesn't write any new rows
 		getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 4)
 
-		stopReplication()
+		State.cancel()
+		time.Sleep(100 * time.Millisecond)
 	})
 }

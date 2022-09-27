@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"math/rand"
 	"strconv"
 	"sync/atomic"
@@ -53,7 +52,7 @@ func updateReplicationDelay(eventTime uint32) {
 
 type PerSecondEventCountMap = map[uint64]uint32
 
-func startReplication(ctx context.Context, gtidSet mysql.GTIDSet) error {
+func startReplication(gtidSet mysql.GTIDSet) error {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
 		HeartbeatPeriod: 60 * time.Second,
@@ -82,7 +81,7 @@ func startReplication(ctx context.Context, gtidSet mysql.GTIDSet) error {
 		var txnCommitTime time.Time
 
 		for {
-			ev, err := streamer.GetEvent(ctx)
+			ev, err := streamer.GetEvent(State.ctx)
 			if err != nil {
 				return err
 			}
@@ -128,7 +127,7 @@ func startReplication(ctx context.Context, gtidSet mysql.GTIDSet) error {
 				// TODO make cachedChColumnsForTable support []byte so it doesn't need extra allocations
 				// or is there a faster way to check this to make skipping less expensive?
 				// is this even expensive?
-				_, hasColumns := cachedChColumnsForTable(string(e.Table.Table))
+				_, hasColumns := State.chColumns.ColumnsForTable(string(e.Table.Table))
 				if !hasColumns {
 					continue
 				}

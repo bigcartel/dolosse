@@ -4,21 +4,30 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/siddontang/go-log/log"
 	boom "github.com/tylertreat/BoomFilters"
 )
 
-// The Inverse Bloom Filter may report a false negative but can never report a false positive.
-// behaves a bit like a fixed size hash map that doesn't handle conflicts
-var batchDuplicatesFilter = boom.NewInverseBloomFilter(1000000)
-
 const batchDuplicatesFilterKey = "batch-duplicates-filter-state"
 
-func readBloomFilterState(ch ClickhouseDb) {
+type BatchDuplicatesFilter struct {
+	// The Inverse Bloom Filter may report a false negative but can never report a false positive.
+	// behaves a bit like a fixed size hash map that doesn't handle conflicts
+	f *boom.InverseBloomFilter
+}
+
+func NewBatchDuplicatesFilter(size uint) BatchDuplicatesFilter {
+	return BatchDuplicatesFilter{
+		f: boom.NewInverseBloomFilter(size),
+	}
+}
+
+func (f *BatchDuplicatesFilter) loadState(ch ClickhouseDb) {
 	s := ch.GetStateString(batchDuplicatesFilterKey)
 
-	bytes, err := batchDuplicatesFilter.ImportElementsFrom(strings.NewReader(s))
+	bytes, err := f.f.ImportElementsFrom(strings.NewReader(s))
 	if err != nil {
 		if err == io.EOF {
 			log.Infoln("local deduplication state was corrupted, skipping")
@@ -31,9 +40,16 @@ func readBloomFilterState(ch ClickhouseDb) {
 	log.Debugf("Read %d bytes for deduplication state", bytes)
 }
 
-func writeBloomFilterState(ch ClickhouseDb) {
+func (f *BatchDuplicatesFilter) TestAndAdd(data string) bool {
+	// todo cast this without an allocation?
+	return f.f.TestAndAdd([]byte(data))
+}
+
+func (f *BatchDuplicatesFilter) writeState(ch ClickhouseDb) {
+	start := time.Now()
 	w := bytes.NewBuffer(make([]byte, 0))
-	bytes := unwrap(batchDuplicatesFilter.WriteTo(w))
+	unwrap(f.f.WriteTo(w))
 	ch.SetStateString(batchDuplicatesFilterKey, w.String())
-	log.Debugf("Wrote %d bytes", bytes)
+	// Code to measure
+	log.Infoln("Wrote bloom filter state in", time.Since(start))
 }
