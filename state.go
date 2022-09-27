@@ -23,7 +23,6 @@ type GlobalState struct {
 	chColumns             ChColumns
 	mysqlColumns          ConcurrentMap[*schema.Table]
 	dumpingTables         ConcurrentMap[struct{}]
-	config                GlobalConfig
 	batchDuplicatesFilter BatchDuplicatesFilter
 }
 
@@ -35,8 +34,6 @@ func NewGlobalState() *GlobalState {
 	s.cancel = cancel
 
 	const batchSize = 100000
-	const concurrentBatchWrites = 10
-	const concurrentMysqlDumpSelects = 10
 
 	s.chColumns = ChColumns{
 		m: NewConcurrentMap[ChColumnSet](),
