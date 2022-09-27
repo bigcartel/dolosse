@@ -51,6 +51,7 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 
 func startTestSync() {
 	initState(true)
+	State.batchDuplicatesFilter.resetStateFile()
 	startSync()
 }
 

@@ -1,9 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"io"
-	"strings"
+	"os"
 	"sync"
 	"time"
 
@@ -25,36 +24,62 @@ func NewBatchDuplicatesFilter(size uint) BatchDuplicatesFilter {
 	}
 }
 
-func (f *BatchDuplicatesFilter) loadState(ch ClickhouseDb) {
-	s := ch.GetStateString(batchDuplicatesFilterKey)
-
-	bytes, err := f.f.ImportElementsFrom(strings.NewReader(s))
-	if err != nil {
-		if err == io.EOF {
-			log.Infoln("local deduplication state was corrupted, skipping")
-			return
-		} else {
-			must(err)
-		}
-	}
-
-	log.Debugf("Read %d bytes for deduplication state", bytes)
-}
-
 func (f *BatchDuplicatesFilter) TestAndAdd(data string) bool {
 	// todo cast this without an allocation?
 	return f.f.TestAndAdd([]byte(data))
 }
 
+func (f *BatchDuplicatesFilter) resetStateFile() {
+	f.stateFile(true)
+}
+
+func (fl *BatchDuplicatesFilter) stateFile(truncate bool) *os.File {
+	fArgs := os.O_RDWR | os.O_CREATE | os.O_APPEND
+	if truncate {
+		fArgs = fArgs | os.O_TRUNC
+	}
+
+	path, err := os.Getwd()
+	must(err)
+
+	f, err := os.OpenFile(path+"/duplicates_state", fArgs, 0600)
+	must(err)
+
+	return f
+}
+
+func (fl *BatchDuplicatesFilter) loadState(ch ClickhouseDb) {
+	f := fl.stateFile(false)
+	defer f.Close()
+
+	info := unwrap(f.Stat())
+	if info.Size() > 0 {
+		bytes, err := fl.f.ImportElementsFrom(f)
+		if err != nil {
+			if err == io.EOF {
+				log.Infoln("local deduplication state was corrupted, skipping")
+				return
+			} else {
+				must(err)
+			}
+		}
+
+		log.Debugf("Read %d bytes for deduplication state from %s", bytes, f.Name())
+	}
+}
+
 var bfMu = sync.Mutex{}
 
-func (f *BatchDuplicatesFilter) writeState(ch ClickhouseDb) {
+func (fi *BatchDuplicatesFilter) writeState(ch ClickhouseDb) {
 	bfMu.Lock()
 	defer bfMu.Unlock()
 	start := time.Now()
-	w := bytes.NewBuffer(make([]byte, 0))
-	unwrap(f.f.WriteTo(w))
-	ch.SetStateString(batchDuplicatesFilterKey, w.String())
-	// Code to measure
-	log.Infoln("Wrote bloom filter state in", time.Since(start))
+	defer log.Infoln("Wrote bloom filter state in", time.Since(start))
+
+	f := fi.stateFile(true)
+	defer f.Close()
+
+	bytes, err := fi.f.WriteTo(f)
+	must(err)
+	log.Infof("Wrote %d bytes to %s", bytes, f.Name())
 }

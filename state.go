@@ -60,7 +60,7 @@ func (s *GlobalState) Init() {
 	// to do it using clickhouse translated types for max compat
 	clickhouseDb.CheckSchema()
 
-	s.batchDuplicatesFilter = NewBatchDuplicatesFilter(1000000)
+	s.batchDuplicatesFilter = NewBatchDuplicatesFilter(10000000)
 	s.batchDuplicatesFilter.loadState(clickhouseDb)
 	s.chColumns.Sync(clickhouseDb)
 }
