@@ -13,7 +13,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-	"github.com/siddontang/go-log/log"
 )
 
 type MysqlReplicationRowEvent struct {
@@ -119,11 +118,6 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 					continue
 				}
 
-				// FIGURE THIS OUT if it's possible - might not be
-				for _, c := range e.Table.ColumnName {
-					log.Infoln(string(c))
-				}
-
 				// TODO make cachedChColumnsForTable support []byte so it doesn't need extra allocations
 				// or is there a faster way to check this to make skipping less expensive?
 				// is this even expensive?
@@ -141,7 +135,6 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 					action = UpdateAction
 				}
 
-				// TODO use event table info so columns match up for events pre-schema changes
 				table := getMysqlTable(string(e.Table.Schema), string(e.Table.Table))
 
 				rowE := MysqlReplicationRowEvent{
