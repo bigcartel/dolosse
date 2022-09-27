@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/siddontang/go-log/log"
@@ -45,7 +46,11 @@ func (f *BatchDuplicatesFilter) TestAndAdd(data string) bool {
 	return f.f.TestAndAdd([]byte(data))
 }
 
+var bfMu = sync.Mutex{}
+
 func (f *BatchDuplicatesFilter) writeState(ch ClickhouseDb) {
+	bfMu.Lock()
+	defer bfMu.Unlock()
 	start := time.Now()
 	w := bytes.NewBuffer(make([]byte, 0))
 	unwrap(f.f.WriteTo(w))
