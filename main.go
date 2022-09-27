@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pkg/profile"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 
@@ -456,8 +458,8 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 	go State.batchDuplicatesFilter.writeState(clickhouseDb)
 }
 
-func initState() {
-	Stats.Init()
+func initState(testing bool) {
+	Stats.Init(testing)
 	State.Init()
 }
 
@@ -491,7 +493,7 @@ func startSync() {
 
 func main() {
 	Config.ParseFlags(os.Args[1:])
-	initState()
+	initState(false)
 
 	var p *profile.Profile
 	if *Config.RunProfile {
@@ -510,6 +512,13 @@ func main() {
 		}
 
 		os.Exit(1)
+	}()
+
+	go func() {
+		log.Infoln("Now listening at :3002 for prometheus")
+		if err := http.ListenAndServe(":3002", promhttp.Handler()); err != nil {
+			log.Fatal(err)
+		}
 	}()
 
 	startSync()

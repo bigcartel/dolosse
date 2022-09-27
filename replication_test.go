@@ -50,7 +50,7 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 }
 
 func startTestSync() {
-	initState()
+	initState(true)
 	startSync()
 }
 
