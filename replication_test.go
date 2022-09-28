@@ -8,6 +8,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/shopspring/decimal"
+	"github.com/siddontang/go-log/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -186,9 +187,10 @@ func TestReplicationAndDump(t *testing.T) {
 
 		go startTestSync(clickhouseConn)
 
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 
 		r := getChRows(t, clickhouseConn, "select id, changelog_action from test.test order by id asc", 4)
+		log.Infoln(r)
 
 		assert.Equal(t, int32(1), r[0][0].(int32), "replicated id should match")
 		assert.Equal(t, "dump", r[0][1].(string))
@@ -203,6 +205,8 @@ func TestReplicationAndDump(t *testing.T) {
 		*Config.Rewind = true
 
 		go startTestSync(clickhouseConn)
+
+		time.Sleep(500 * time.Millisecond)
 
 		// it doesn't write any new rows
 		getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 4)

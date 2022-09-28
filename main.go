@@ -14,6 +14,7 @@ import (
 
 	"github.com/pkg/profile"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/atomic"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 
@@ -359,13 +360,19 @@ func (es *EventsByTable) Reset() {
 	}
 }
 
+var deliverMut = sync.Mutex{}
+
 func batchWrite() {
 	clickhouseDb := unwrap(establishClickhouseConnection())
 
-	eventsByTable := make(EventsByTable)
+	// make this an atomic pointer - swap between two whenever delivering
+	eventsByTable1 := make(EventsByTable)
+	eventsByTable2 := make(EventsByTable)
+	eventsByTable := atomic.NewPointer(&eventsByTable1)
 	var lastGtidSet string
 	var timer *time.Timer
 	var counter int
+	batchCount := 0
 
 	resetCountAndTimer := func() {
 		timer = time.NewTimer(*Config.BatchWriteInterval)
@@ -375,21 +382,37 @@ func batchWrite() {
 	resetCountAndTimer()
 
 	deliver := func() {
+		deliverMut.Lock()
 		State.batchDuplicatesFilter.snapshotState()
 
-		// Could also get delay by peeking events periodicially to avoid computing it
-		delay := replicationDelay.Load()
-		log.Infoln("replication delay is", delay, "seconds")
+		var deliverEbt *EventsByTable
 
-		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
-		eventsByTable.Reset()
-		Stats.Print()
-		resetCountAndTimer()
-
-		if !State.dumped.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
-			go DumpMysqlDb(&clickhouseDb, *Config.Dump || *Config.DumpImmediately)
-			log.Infoln("Started mysql db dump")
+		if batchCount%2 == 1 {
+			eventsByTable.Store(&eventsByTable2)
+			deliverEbt = &eventsByTable1
+		} else {
+			eventsByTable.Store(&eventsByTable1)
+			deliverEbt = &eventsByTable2
 		}
+
+		resetCountAndTimer()
+		batchCount++
+
+		go func() {
+			// Could also get delay by peeking events periodicially to avoid computing it
+			delay := replicationDelay.Load()
+			log.Infoln("replication delay is", delay, "seconds")
+
+			deliverBatch(clickhouseDb, *deliverEbt, lastGtidSet)
+			deliverEbt.Reset()
+			Stats.Print()
+
+			if !State.dumped.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
+				go DumpMysqlDb(&clickhouseDb, *Config.Dump || *Config.DumpImmediately)
+				log.Infoln("Started mysql db dump")
+			}
+			deliverMut.Unlock()
+		}()
 	}
 
 	for {
@@ -406,15 +429,16 @@ func batchWrite() {
 		case gtid := <-State.latestProcessingGtid:
 			lastGtidSet = gtid
 		case e := <-State.batchWrite:
-			if eventsByTable[e.EventTable] == nil {
+			ebt := *eventsByTable.Load()
+			if ebt[e.EventTable] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
 				eventSlice := make([]*RowInsertData, 0, *Config.BatchSize/20)
-				eventsByTable[e.EventTable] = &eventSlice
+				ebt[e.EventTable] = &eventSlice
 			}
 
-			events := append(*eventsByTable[e.EventTable], e)
-			eventsByTable[e.EventTable] = &events
+			events := append(*ebt[e.EventTable], e)
+			ebt[e.EventTable] = &events
 
 			if counter == *Config.BatchSize {
 				deliver()
