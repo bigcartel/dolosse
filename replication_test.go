@@ -49,9 +49,9 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 	}
 }
 
-func startTestSync() {
+func startTestSync(ch ClickhouseDb) {
 	initState(true)
-	State.batchDuplicatesFilter.resetStateFile()
+	State.batchDuplicatesFilter.resetState(&ch)
 	startSync()
 }
 
@@ -132,7 +132,7 @@ func TestBasicReplication(t *testing.T) {
 	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 		InitDbs(mysqlConn, clickhouseConn)
 
-		go startTestSync()
+		go startTestSync(clickhouseConn)
 
 		time.Sleep(100 * time.Millisecond)
 
@@ -184,7 +184,7 @@ func TestReplicationAndDump(t *testing.T) {
 			);
 		`)
 
-		go startTestSync()
+		go startTestSync(clickhouseConn)
 
 		time.Sleep(100 * time.Millisecond)
 
@@ -202,7 +202,7 @@ func TestReplicationAndDump(t *testing.T) {
 		State.cancel()
 		*Config.Rewind = true
 
-		go startTestSync()
+		go startTestSync(clickhouseConn)
 
 		// it doesn't write any new rows
 		getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 4)

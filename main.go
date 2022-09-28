@@ -379,6 +379,8 @@ func batchWrite() {
 	resetCountAndTimer()
 
 	deliver := func() {
+		State.batchDuplicatesFilter.snapshotState()
+
 		// Could also get delay by peeking events periodicially to avoid computing it
 		delay := replicationDelay.Load()
 		log.Infoln("replication delay is", delay, "seconds")
@@ -451,11 +453,11 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 
 	wg.Wait()
 
-	if lastGtidSet != "" {
-		clickhouseDb.SetGTIDString(lastGtidSet)
-	}
+	go State.batchDuplicatesFilter.writeState(&clickhouseDb)
 
-	go State.batchDuplicatesFilter.writeState()
+	if lastGtidSet != "" {
+		go clickhouseDb.SetGTIDString(lastGtidSet)
+	}
 }
 
 func initState(testing bool) {

@@ -1,2 +1,2 @@
 mysql-binlog-clickhouse-sink
-duplicates_state
+*.lz4

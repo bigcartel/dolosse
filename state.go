@@ -61,7 +61,7 @@ func (s *GlobalState) Init() {
 	clickhouseDb.CheckSchema()
 
 	s.batchDuplicatesFilter = NewBatchDuplicatesFilter(1000000)
-	s.batchDuplicatesFilter.loadState()
+	s.batchDuplicatesFilter.loadState(&clickhouseDb)
 	s.chColumns.Sync(clickhouseDb)
 }
 
