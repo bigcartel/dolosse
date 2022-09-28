@@ -455,7 +455,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 		clickhouseDb.SetGTIDString(lastGtidSet)
 	}
 
-	go State.batchDuplicatesFilter.writeState(clickhouseDb)
+	go State.batchDuplicatesFilter.writeState()
 }
 
 func initState(testing bool) {
@@ -492,7 +492,7 @@ func startSync() {
 }
 
 func main() {
-	Config.ParseFlags(os.Args[1:], false)
+	Config.ParseFlags(os.Args[1:])
 	initState(false)
 
 	var p *profile.Profile

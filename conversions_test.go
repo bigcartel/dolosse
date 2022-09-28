@@ -78,7 +78,7 @@ func TestEventToClickhouseRowData(t *testing.T) {
 }
 
 func TestParseBadYaml(t *testing.T) {
-	Config.ParseFlags([]string{}, true)
+	Config.ParseFlags([]string{})
 
 	yaml := `---
 :primary_font: Abril Fatface

@@ -22,7 +22,6 @@ var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
 func parseString(value string, tableName string, columnName string) interface{} {
 	var out interface{}
 
-	log.Infoln(Config.YamlColumns)
 	if isYamlColumn(tableName, columnName) {
 		y := make(map[string]interface{})
 

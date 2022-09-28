@@ -32,7 +32,7 @@ type GlobalConfig struct {
 	YamlColumns []string
 }
 
-func (c *GlobalConfig) ParseFlags(args []string, force bool) {
+func (c *GlobalConfig) ParseFlags(args []string) {
 	*c = GlobalConfig{}
 
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)

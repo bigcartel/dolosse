@@ -20,7 +20,7 @@ func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn Cli
 		"--clickhouse-addr=0.0.0.0:9001",
 		"--batch-write-interval=10ms",
 		"--clickhouse-db=test",
-	}, true)
+	})
 
 	mysqlConn, err := client.Connect(*Config.MysqlAddr, *Config.MysqlUser, "", "", func(c *client.Conn) {
 		c.SetCapability(mysql.CLIENT_MULTI_STATEMENTS)
