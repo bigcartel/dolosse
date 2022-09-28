@@ -22,9 +22,6 @@ import (
 	"github.com/siddontang/go-log/log"
 )
 
-const concurrentBatchWrites = 10
-const concurrentMysqlDumpSelects = 10
-
 type LookupMap map[string]bool
 
 type RowData map[string]interface{}
@@ -432,7 +429,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 	State.chColumns.Sync(clickhouseDb)
 
 	var wg sync.WaitGroup
-	working := make(chan bool, concurrentBatchWrites)
+	working := make(chan bool, *Config.ConcurrentBatchWrites)
 
 	for table, rows := range eventsByTable {
 		_, hasColumns := State.chColumns.ColumnsForTable(table)

@@ -21,7 +21,9 @@ type GlobalConfig struct {
 
 	MysqlDbByte []byte
 
-	BatchSize *int
+	BatchSize,
+	ConcurrentBatchWrites,
+	ConcurrentMysqlDumpSelects *int
 
 	BatchWriteInterval *time.Duration
 
@@ -59,17 +61,20 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.ClickhouseUsername = fs.String("clickhouse-username", "default", "Clickhouse username (also via CLICKHOUSE_USERNAME)")
 	c.ClickhousePassword = fs.String("clickhouse-password", "", "Clickhouse password (also available via CLICKHOUSE_PASSWORD)")
 	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Second, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
-	c.BatchSize = fs.Int("batch-size", 100000, "Threshold of records needed to trigger batch write. Batch write will happen when either batch-write-interval since last batch write is exceeded, or this threshold is hit.")
+	c.BatchSize = fs.Int("batch-size", 100000,
+		"Threshold of records needed to trigger batch write. Batch write will happen when either batch-write-interval since last batch write is exceeded, or this threshold is hit.")
+	c.ConcurrentBatchWrites = fs.Int("concurrent-batch-writes", 10, "Number of batch writes of different tables to clickhouse to run in parallel")
+	c.ConcurrentMysqlDumpSelects = fs.Int("concurrent-mysql-dump-selects", 10, "Number of concurrent select queries to run when dumping mysql db")
 
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
-	AnonymizeFields := fs.String("anonymize-fields", "address,street,secret,postal,line1,line2,password,salt,email,longitude,latitude,payment_methods.properties", "Comma separated list of field names to anonymize. The match is fuzzy - so secret will match encrypted_secret. a dot in the field represents a subfield in a yaml/json column. so payment_methods.properties will anonymize the properties field in the payment_methods json object.")
+	AnonymizeFields := fs.String("anonymize-fields",
+		"address,street,secret,postal,line1,line2,password,salt,email,longitude,latitude,payment_methods.properties",
+		"Comma separated list of field names to anonymize. The match is fuzzy - so secret will match encrypted_secret. a dot in the field represents a subfield in a yaml/json column. so payment_methods.properties will anonymize the properties field in the payment_methods json object.")
 
 	c.IgnoredColumnsForDeduplication = strings.Split(*IgnoredColumnsForDeduplication, ",")
 	c.YamlColumns = strings.Split(*YamlColumns, ",")
 	c.AnonymizeFields = strings.Split(*AnonymizeFields, ",")
-
-	// TODO make various global configs cli args for different workloads
 
 	must(ff.Parse(fs, args,
 		ff.WithConfigFileFlag("config"),

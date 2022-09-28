@@ -76,7 +76,7 @@ func withMysqlConnection[T any](f func(c *client.Conn) T) T {
 
 func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 	var wg sync.WaitGroup
-	working := make(chan bool, concurrentMysqlDumpSelects)
+	working := make(chan bool, *Config.ConcurrentMysqlDumpSelects)
 
 	for table := range *State.chColumns.m.m {
 		if State.dumpingTables.Get(table) == nil && !chConn.GetTableDumped(table) || forceDump {
