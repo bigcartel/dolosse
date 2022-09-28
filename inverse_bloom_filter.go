@@ -21,7 +21,6 @@ type BatchDuplicatesFilter struct {
 	// behaves a bit like a fixed size hash map that doesn't handle conflicts
 	f             *boom.InverseBloomFilter
 	stateSnapshot string
-	clickhouseKey string
 }
 
 func NewBatchDuplicatesFilter(size uint) BatchDuplicatesFilter {

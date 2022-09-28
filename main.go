@@ -22,7 +22,6 @@ import (
 	"github.com/siddontang/go-log/log"
 )
 
-const batchSize = 100000
 const concurrentBatchWrites = 10
 const concurrentMysqlDumpSelects = 10
 
@@ -413,14 +412,14 @@ func batchWrite() {
 			if eventsByTable[e.EventTable] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
-				eventSlice := make([]*RowInsertData, 0, batchSize/20)
+				eventSlice := make([]*RowInsertData, 0, *Config.BatchSize/20)
 				eventsByTable[e.EventTable] = &eventSlice
 			}
 
 			events := append(*eventsByTable[e.EventTable], e)
 			eventsByTable[e.EventTable] = &events
 
-			if counter == batchSize {
+			if counter == *Config.BatchSize {
 				deliver()
 			} else {
 				counter++
