@@ -89,6 +89,7 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 				working <- true
 				dumpTable(*Config.MysqlDb, t)
 				chConn.SetTableDumped(table, true)
+				<-working
 				wg.Done()
 			}(table)
 		}
