@@ -55,13 +55,17 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
 		HeartbeatPeriod: 60 * time.Second,
-		Flavor:          "mysql",
 		Host:            *Config.MysqlAddr,
 		User:            *Config.MysqlUser,
 		Password:        *Config.MysqlPassword,
-		UseDecimal:      false,
-		ParseTime:       false,
+		Flavor:          "mysql",
+		RawModeEnabled:  true,
 	}
+
+	parser := replication.NewBinlogParser()
+	parser.SetFlavor("mysql")
+	parser.SetUseDecimal(false)
+	parser.SetParseTime(false)
 
 	// TODO experiment with raw mode and instantiating parser to only parse events of interest
 	// parser := replication.NewBinlogParser()
@@ -80,9 +84,34 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 		var txnCommitTime time.Time
 
 		for {
-			ev, err := streamer.GetEvent(State.ctx)
+			rawEv, err := streamer.GetEvent(State.ctx)
 			if err != nil {
 				return err
+			}
+
+			var ev *replication.BinlogEvent
+			switch rawEv.Header.EventType {
+			case replication.TABLE_MAP_EVENT,
+				replication.FORMAT_DESCRIPTION_EVENT,
+				replication.GTID_EVENT,
+				replication.XID_EVENT,
+				replication.WRITE_ROWS_EVENTv0,
+				replication.UPDATE_ROWS_EVENTv0,
+				replication.DELETE_ROWS_EVENTv0,
+				replication.WRITE_ROWS_EVENTv1,
+				replication.DELETE_ROWS_EVENTv1,
+				replication.UPDATE_ROWS_EVENTv1,
+				replication.WRITE_ROWS_EVENTv2,
+				replication.UPDATE_ROWS_EVENTv2,
+				replication.DELETE_ROWS_EVENTv2:
+
+				ev, err = parser.Parse(rawEv.RawData)
+
+				if err != nil {
+					panic(err)
+				}
+			default:
+				continue
 			}
 
 			// This is a partial copy of
@@ -109,10 +138,6 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 
 					serverUuid = sid.String()
 				}
-			case *replication.QueryEvent:
-				// TODO do a naive check for alter table here
-				// - if an alter table is detected clear the mysql table cache used to decode events
-				// log.Infoln(string(e.Query))
 			case *replication.RowsEvent:
 				if !bytes.Equal(e.Table.Schema, Config.MysqlDbByte) {
 					continue
