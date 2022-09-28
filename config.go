@@ -2,10 +2,12 @@ package main
 
 import (
 	"flag"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v3"
+	"github.com/siddontang/go-log/log"
 )
 
 type GlobalConfig struct {
@@ -76,10 +78,18 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.YamlColumns = strings.Split(*YamlColumns, ",")
 	c.AnonymizeFields = strings.Split(*AnonymizeFields, ",")
 
-	must(ff.Parse(fs, args,
+	err := ff.Parse(fs, args,
 		ff.WithConfigFileFlag("config"),
 		ff.WithConfigFileParser(ff.PlainParser),
-	))
+	)
+
+	if err != nil {
+		if err.Error() != "error parsing commandline arguments: flag: help requested" {
+			log.Infoln(err)
+		}
+
+		os.Exit(1)
+	}
 
 	c.MysqlDbByte = []byte(*Config.MysqlDb)
 }
