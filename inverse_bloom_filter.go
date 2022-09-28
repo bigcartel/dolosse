@@ -78,7 +78,6 @@ func (fi *BatchDuplicatesFilter) writeState(ch GetSetBloomFilterState) {
 
 	start := time.Now()
 	ch.SetStateString(batchDuplicatesFilterKey, fi.stateSnapshot)
-	fi.stateSnapshot = ""
-	// Code to measure
 	log.Infof("Wrote %d bytes to bloom filter state in %s", len(fi.stateSnapshot), time.Since(start))
+	fi.stateSnapshot = ""
 }
