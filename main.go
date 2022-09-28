@@ -502,12 +502,14 @@ func main() {
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-ch
-		State.cancel()
 		log.Infoln("Exiting...")
-		time.Sleep(2 * time.Second)
+
 		if *Config.RunProfile && p != nil {
 			p.Stop()
 		}
+
+		State.cancel()
+		time.Sleep(2 * time.Second)
 
 		os.Exit(1)
 	}()
