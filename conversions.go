@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,11 +12,10 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/goccy/go-yaml"
+	"github.com/minio/pkg/wildcard"
 	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
 )
-
-var weirdYamlKeyMatcher = regexp.MustCompile("^:(.*)")
 
 func parseString(value string, tableName string, columnName string) interface{} {
 	var out interface{}
@@ -37,7 +35,7 @@ func parseString(value string, tableName string, columnName string) interface{} 
 		for k, v := range y {
 			delete(y, k)
 			v = anonymizeValue(v, tableName, fmt.Sprintf("%s.%s", columnName, k))
-			y[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = v
+			y[stripLeadingColon(k)] = v
 		}
 
 		out, err = json.Marshal(y)
@@ -101,7 +99,7 @@ func parseValue(value interface{}, columnType int, tableName string, columnName 
 
 func stringInSlice(s string, slice []string) bool {
 	for i := range slice {
-		if strings.Contains(s, slice[i]) {
+		if wildcard.Match(slice[i], s) {
 			return true
 		}
 	}
@@ -114,18 +112,28 @@ func isAnonymizedField(s string) bool {
 }
 
 func isYamlColumn(tableName string, columnName string) bool {
-	return stringInSlice(fmt.Sprintf("%s.%s", tableName, columnName), Config.YamlColumns)
+	return stringInSlice(fieldString(tableName, columnName), Config.YamlColumns)
 }
 
 func fieldString(table string, columnPath string) string {
 	b := strings.Builder{}
 	b.WriteString(table)
+	b.WriteString(".")
 	b.WriteString(columnPath)
 	return b.String()
 }
 
 func hashString(s *[]byte) string {
 	return strconv.FormatUint(city.CH64(*s), 10)
+}
+
+// sanitize yaml keys that start with colon
+func stripLeadingColon(s string) string {
+	if s[0] == ':' {
+		return s[1:]
+	} else {
+		return s
+	}
 }
 
 // currently only supports strings
@@ -137,7 +145,8 @@ func anonymizeValue(value interface{}, table string, columnPath string) interfac
 		for k, subv := range v {
 			delete(v, k)
 			subv = anonymizeValue(subv, table, fmt.Sprintf("%s.%s", columnPath, k))
-			v[weirdYamlKeyMatcher.ReplaceAllString(k, "$1")] = subv
+
+			v[stripLeadingColon(k)] = subv
 		}
 	case []interface{}:
 		for i := range v {

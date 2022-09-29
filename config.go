@@ -71,8 +71,8 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
-		"address,street,secret,postal,line1,line2,password,salt,email,longitude,latitude,payment_methods.properties,given_name,surname,exp_month,exp_year,receipt_url",
-		"Comma separated list of field names to anonymize. The match is fuzzy - so secret will match encrypted_secret. a dot in the field represents a subfield in a yaml/json column. so payment_methods.properties will anonymize the properties field in the payment_methods json object.")
+		"*address*,*street*,*secret*,*postal*,*line?,*password*,*salt*,*email*,*longitude*,*latitude*,payment_methods.properties*,payment_methods.*description*,*given_name*,*surname*,*exp_*,*receipt_*",
+		"Comma separated list of field name patterns to anonymize. Supports * and ? syntax, * means 0 or more of any character, ? means exactly one of any character. cool*line? will match cool.something.line1,cool-whatever-line2, etc. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
 
 	c.IgnoredColumnsForDeduplication = strings.Split(*IgnoredColumnsForDeduplication, ",")
 	c.YamlColumns = strings.Split(*YamlColumns, ",")

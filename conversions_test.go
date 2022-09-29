@@ -388,7 +388,7 @@ func TestParseValueUint8Array(t *testing.T) {
 
 func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	Config.YamlColumns = []string{"test_table.yaml_column"}
-	Config.AnonymizeFields = []string{"email", "password"}
+	Config.AnonymizeFields = []string{"*email*", "*password*"}
 	password := "test"
 	email := "max@test.com"
 	firstName := "max"
