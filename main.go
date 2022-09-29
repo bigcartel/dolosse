@@ -495,7 +495,7 @@ func main() {
 
 	var p *profile.Profile
 	if *Config.RunProfile {
-		p = profile.Start(profile.TraceProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
+		p = profile.Start(profile.CPUProfile, profile.ProfilePath("."), profile.NoShutdownHook).(*profile.Profile)
 	}
 
 	ch := make(chan os.Signal, 1)
