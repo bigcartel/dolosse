@@ -209,5 +209,6 @@ func TestReplicationAndDump(t *testing.T) {
 
 		State.cancel()
 		time.Sleep(100 * time.Millisecond)
+		assert.True(t, clickhouseConn.GetTableDumped("test"))
 	})
 }
