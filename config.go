@@ -71,7 +71,7 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
-		"address,street,secret,postal,line1,line2,password,salt,email,longitude,latitude,payment_methods.properties",
+		"address,street,secret,postal,line1,line2,password,salt,email,longitude,latitude,payment_methods.properties,given_name,surname,exp_month,exp_year,receipt_url",
 		"Comma separated list of field names to anonymize. The match is fuzzy - so secret will match encrypted_secret. a dot in the field represents a subfield in a yaml/json column. so payment_methods.properties will anonymize the properties field in the payment_methods json object.")
 
 	c.IgnoredColumnsForDeduplication = strings.Split(*IgnoredColumnsForDeduplication, ",")
