@@ -96,8 +96,6 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 	}
 
 	wg.Wait()
-
-	State.dumped.Store(true)
 }
 
 // We copy these because each val passed in is using a shared and re-used buffer

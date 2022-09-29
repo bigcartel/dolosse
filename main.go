@@ -386,7 +386,8 @@ func batchWrite() {
 		Stats.Print()
 		resetCountAndTimer()
 
-		if !State.dumped.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
+		if !State.initiatedDump.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
+			State.initiatedDump.Store(true)
 			go DumpMysqlDb(&clickhouseDb, *Config.Dump || *Config.DumpImmediately)
 			log.Infoln("Started mysql db dump")
 		}

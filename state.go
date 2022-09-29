@@ -17,7 +17,7 @@ type GlobalState struct {
 	processRows           chan *MysqlReplicationRowEvent
 	batchWrite            chan *RowInsertData
 	latestProcessingGtid  chan string
-	dumped                atomic.Bool
+	initiatedDump         atomic.Bool
 	mysqlPoolInitialized  atomic.Bool
 	mysqlPool             *client.Pool
 	chColumns             ChColumns
