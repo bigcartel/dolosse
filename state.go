@@ -33,13 +33,11 @@ func NewGlobalState() *GlobalState {
 	s.ctx = ctx
 	s.cancel = cancel
 
-	const batchSize = 100000
-
 	s.chColumns = ChColumns{
 		m: NewConcurrentMap[ChColumnSet](),
 	}
-	s.processRows = make(chan *MysqlReplicationRowEvent, batchSize)
-	s.batchWrite = make(chan *RowInsertData, batchSize)
+	s.processRows = make(chan *MysqlReplicationRowEvent, *Config.BatchSize*2)
+	s.batchWrite = make(chan *RowInsertData, *Config.BatchSize*2)
 	s.latestProcessingGtid = make(chan string)
 	s.dumpingTables = NewConcurrentMap[struct{}]()
 	s.mysqlColumns = NewConcurrentMap[*schema.Table]()
