@@ -515,10 +515,8 @@ func main() {
 	}()
 
 	go func() {
-		log.Infoln("Now listening at :3002 for prometheus")
-		if err := http.ListenAndServe(":3002", promhttp.Handler()); err != nil {
-			log.Fatal(err)
-		}
+		log.Infoln("Now listening at :3003 for prometheus")
+		must(http.ListenAndServe(":3003", promhttp.Handler()))
 	}()
 
 	startSync()
