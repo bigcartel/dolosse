@@ -78,7 +78,8 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 	var wg sync.WaitGroup
 	working := make(chan bool, *Config.ConcurrentMysqlDumpSelects)
 
-	for table := range *State.chColumns.m.m {
+	State.chColumns.m.m.Range(func(k, _ any) bool {
+		table := k.(string)
 		if State.dumpingTables.Get(table) == nil && !chConn.GetTableDumped(table) || forceDump {
 			State.dumpingTables.Set(table, &struct{}{})
 			chConn.SetTableDumped(table, false) // reset if force dump
@@ -93,7 +94,9 @@ func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 				wg.Done()
 			}(table)
 		}
-	}
+
+		return true
+	})
 
 	wg.Wait()
 }

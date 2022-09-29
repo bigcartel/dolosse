@@ -97,9 +97,33 @@ func parseValue(value interface{}, columnType int, tableName string, columnName 
 	}
 }
 
+var stringInSliceMatchCache = NewConcurrentMap[ConcurrentMap[bool]]()
+
 func stringInSlice(s string, slice []string) bool {
 	for i := range slice {
-		if wildcard.Match(slice[i], s) {
+		matcher := slice[i]
+		var cachedMatch *bool
+		matcherCache := stringInSliceMatchCache.Get(matcher)
+		if matcherCache != nil {
+			cachedMatch = matcherCache.Get(s)
+
+			if cachedMatch != nil {
+				return *cachedMatch
+			}
+		}
+
+		wildcardMatched := wildcard.Match(matcher, s)
+
+		if matcherCache == nil {
+			newCache := NewConcurrentMap[bool]()
+			matcherCache = &newCache
+			stringInSliceMatchCache.Set(matcher, &newCache)
+		}
+
+		matcherCache.Set(s, &wildcardMatched)
+
+		if wildcardMatched {
+			// break out of loop and return early
 			return true
 		}
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/goccy/go-yaml"
+	"github.com/stretchr/testify/assert"
 )
 
 func makeRowEvent() *MysqlReplicationRowEvent {
@@ -50,6 +51,7 @@ func makeColumnSet() *ChColumnSet {
 }
 
 func TestEventToClickhouseRowData(t *testing.T) {
+	stringInSliceMatchCache.Reset()
 	Config.YamlColumns = []string{"test_table.yaml_column"}
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
@@ -148,6 +150,7 @@ func TestParseBadYaml(t *testing.T) {
 }
 
 func TestEventWithYaml(t *testing.T) {
+	stringInSliceMatchCache.Reset()
 	yaml := `
 ---
 id: pi_3LhGn1BxWYA6NAEc1iTUZmn1
@@ -377,6 +380,7 @@ func BenchmarkEventToClickhouseRowData(b *testing.B) {
 }
 
 func TestParseValueUint8Array(t *testing.T) {
+	stringInSliceMatchCache.Reset()
 	Config.YamlColumns = []string{"test_table.yaml_column"}
 	outValue := "test string"
 	inValue := []uint8(outValue)
@@ -387,6 +391,7 @@ func TestParseValueUint8Array(t *testing.T) {
 }
 
 func TestParseConvertAndAnonymizeYaml(t *testing.T) {
+	stringInSliceMatchCache.Reset()
 	Config.YamlColumns = []string{"test_table.yaml_column"}
 	Config.AnonymizeFields = []string{"*email*", "*password*"}
 	password := "test"
@@ -433,20 +438,18 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 }
 
 func TestAnonymizeStringValue(t *testing.T) {
+	stringInSliceMatchCache.Reset()
 	Config.YamlColumns = []string{"test_table.yaml_column"}
 	password := "test"
 	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
-	if out == password {
-		t.Fatalf("Expected password '%s' to be anonymized, got %s", password, out)
-	}
+	assert.NotEqual(t, out, password, "expected password string to be anonymized")
 }
 
 func TestAnonymizeByteSlice(t *testing.T) {
+	stringInSliceMatchCache.Reset()
 	Config.YamlColumns = []string{"test_table.yaml_column"}
 	password := []byte("test")
 	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
 
-	if out == string(password) {
-		t.Fatalf("Expected byte slice of password '%s' to be anonymized, got %s", password, out)
-	}
+	assert.NotEqual(t, out, string(password), "expected password byte slice to be anonymized")
 }

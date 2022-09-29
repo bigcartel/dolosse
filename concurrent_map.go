@@ -3,27 +3,28 @@ package main
 import "sync"
 
 type ConcurrentMap[V any] struct {
-	mu sync.RWMutex
-	m  *map[string]*V
+	m sync.Map
 }
 
 func NewConcurrentMap[V any]() ConcurrentMap[V] {
-	m := make(map[string]*V)
-
 	return ConcurrentMap[V]{
-		mu: sync.RWMutex{},
-		m:  &m,
+		m: sync.Map{},
 	}
 }
 
+func (m *ConcurrentMap[V]) Reset() {
+	*m = NewConcurrentMap[V]()
+}
+
 func (m *ConcurrentMap[V]) Get(k string) *V {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return (*m.m)[k]
+	v, _ := (m.m).Load(k)
+	if v != nil {
+		return v.(*V)
+	} else {
+		return nil
+	}
 }
 
 func (m *ConcurrentMap[V]) Set(k string, v *V) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	(*m.m)[k] = v
+	m.m.Store(k, v)
 }
