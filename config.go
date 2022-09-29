@@ -66,7 +66,7 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.BatchSize = fs.Int("batch-size", 100000,
 		"Threshold of records needed to trigger batch write. Batch write will happen when either batch-write-interval since last batch write is exceeded, or this threshold is hit.")
 	c.ConcurrentBatchWrites = fs.Int("concurrent-batch-writes", 10, "Number of batch writes of different tables to clickhouse to run in parallel")
-	c.ConcurrentMysqlDumpSelects = fs.Int("concurrent-mysql-dump-selects", 10, "Number of concurrent select queries to run when dumping mysql db")
+	c.ConcurrentMysqlDumpSelects = fs.Int("concurrent-mysql-dump-selects", 4, "Number of concurrent select queries to run when dumping mysql db")
 
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
