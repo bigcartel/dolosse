@@ -15,7 +15,6 @@ import (
 	"github.com/pkg/profile"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/exp/maps"
-	"golang.org/x/exp/slices"
 
 	"sync"
 
@@ -125,7 +124,7 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 		if columns.columnLookup[columnName] {
 			if isDuplicate &&
 				hasPreviousEvent &&
-				!slices.Contains(Config.IgnoredColumnsForDeduplication, columnName) &&
+				!memoizedRegexpsMatch(columnName, Config.IgnoredColumnsForDeduplication) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
 				isDuplicate = false
 			}

@@ -50,7 +50,7 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 }
 
 func startTestSync(ch ClickhouseDb) {
-	stringInSliceMatchCache.Reset()
+	regexpMatchCache.Reset()
 	initState(true)
 	State.batchDuplicatesFilter.resetState(&ch)
 	startSync()

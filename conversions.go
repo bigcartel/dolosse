@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/goccy/go-yaml"
-	"github.com/minio/pkg/wildcard"
 	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
 )
@@ -97,33 +97,35 @@ func parseValue(value interface{}, columnType int, tableName string, columnName 
 	}
 }
 
-var stringInSliceMatchCache = NewConcurrentMap[ConcurrentMap[bool]]()
+var regexpMatchCache = NewConcurrentMap[ConcurrentMap[bool]]()
 
-func stringInSlice(s string, slice []string) bool {
-	for i := range slice {
-		matcher := slice[i]
-		var cachedMatch *bool
-		matcherCache := stringInSliceMatchCache.Get(matcher)
-		if matcherCache != nil {
-			cachedMatch = matcherCache.Get(s)
+func memoizedStringMatch(v, matcher string, callback func() bool) bool {
+	var cachedMatch *bool
+	matcherCache := regexpMatchCache.Get(matcher)
+	if matcherCache != nil {
+		cachedMatch = matcherCache.Get(v)
 
-			if cachedMatch != nil {
-				return *cachedMatch
-			}
+		if cachedMatch != nil {
+			return *cachedMatch
 		}
+	} else {
+		newCache := NewConcurrentMap[bool]()
+		matcherCache = &newCache
+		regexpMatchCache.Set(matcher, &newCache)
+	}
 
-		wildcardMatched := wildcard.Match(matcher, s)
+	matched := callback()
+	matcherCache.Set(v, &matched)
 
-		if matcherCache == nil {
-			newCache := NewConcurrentMap[bool]()
-			matcherCache = &newCache
-			stringInSliceMatchCache.Set(matcher, &newCache)
-		}
+	return matched
+}
 
-		matcherCache.Set(s, &wildcardMatched)
-
-		if wildcardMatched {
-			// break out of loop and return early
+func memoizedRegexpsMatch(s string, regexps []*regexp.Regexp) bool {
+	for _, r := range regexps {
+		match := memoizedStringMatch(s, r.String(), func() bool {
+			return r.MatchString(s)
+		})
+		if match {
 			return true
 		}
 	}
@@ -132,11 +134,11 @@ func stringInSlice(s string, slice []string) bool {
 }
 
 func isAnonymizedField(s string) bool {
-	return stringInSlice(s, Config.AnonymizeFields)
+	return memoizedRegexpsMatch(s, Config.AnonymizeFields)
 }
 
 func isYamlColumn(tableName string, columnName string) bool {
-	return stringInSlice(fieldString(tableName, columnName), Config.YamlColumns)
+	return memoizedRegexpsMatch(fieldString(tableName, columnName), Config.YamlColumns)
 }
 
 func fieldString(table string, columnPath string) string {

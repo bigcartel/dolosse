@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -51,8 +52,7 @@ func makeColumnSet() *ChColumnSet {
 }
 
 func TestEventToClickhouseRowData(t *testing.T) {
-	stringInSliceMatchCache.Reset()
-	Config.YamlColumns = []string{"test_table.yaml_column"}
+	yamlColumnSetup()
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
@@ -150,7 +150,7 @@ func TestParseBadYaml(t *testing.T) {
 }
 
 func TestEventWithYaml(t *testing.T) {
-	stringInSliceMatchCache.Reset()
+	yamlColumnSetup()
 	yaml := `
 ---
 id: pi_3LhGn1BxWYA6NAEc1iTUZmn1
@@ -325,7 +325,6 @@ shipping:
   tracking_number:
 `
 
-	Config.YamlColumns = []string{"test_table.yaml_column"}
 	columns := &ChColumnSet{
 		columns: []ClickhouseQueryColumn{
 			{
@@ -369,8 +368,13 @@ shipping:
 	}
 }
 
+func yamlColumnSetup() {
+	regexpMatchCache.Reset()
+	Config.YamlColumns = []*regexp.Regexp{regexp.MustCompile("test_table.yaml_column")}
+}
+
 func BenchmarkEventToClickhouseRowData(b *testing.B) {
-	Config.YamlColumns = []string{"test_table.yaml_column"}
+	yamlColumnSetup()
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
@@ -380,8 +384,6 @@ func BenchmarkEventToClickhouseRowData(b *testing.B) {
 }
 
 func TestParseValueUint8Array(t *testing.T) {
-	stringInSliceMatchCache.Reset()
-	Config.YamlColumns = []string{"test_table.yaml_column"}
 	outValue := "test string"
 	inValue := []uint8(outValue)
 	parsedValue := parseValue(inValue, schema.TYPE_STRING, "table", "column")
@@ -391,9 +393,10 @@ func TestParseValueUint8Array(t *testing.T) {
 }
 
 func TestParseConvertAndAnonymizeYaml(t *testing.T) {
-	stringInSliceMatchCache.Reset()
-	Config.YamlColumns = []string{"test_table.yaml_column"}
-	Config.AnonymizeFields = []string{"*email*", "*password*"}
+	Config.AnonymizeFields = []*regexp.Regexp{
+		regexp.MustCompile(".*email.*"),
+		regexp.MustCompile(".*password.*"),
+	}
 	password := "test"
 	email := "max@test.com"
 	firstName := "max"
@@ -438,16 +441,14 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 }
 
 func TestAnonymizeStringValue(t *testing.T) {
-	stringInSliceMatchCache.Reset()
-	Config.YamlColumns = []string{"test_table.yaml_column"}
+	yamlColumnSetup()
 	password := "test"
 	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
 	assert.NotEqual(t, out, password, "expected password string to be anonymized")
 }
 
 func TestAnonymizeByteSlice(t *testing.T) {
-	stringInSliceMatchCache.Reset()
-	Config.YamlColumns = []string{"test_table.yaml_column"}
+	yamlColumnSetup()
 	password := []byte("test")
 	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
 

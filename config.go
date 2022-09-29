@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -34,9 +35,18 @@ type GlobalConfig struct {
 	Rewind,
 	RunProfile *bool
 
-	IgnoredColumnsForDeduplication,
 	AnonymizeFields,
-	YamlColumns []string
+	IgnoredColumnsForDeduplication,
+	YamlColumns []*regexp.Regexp
+}
+
+func csvToRegexps(csv string) []*regexp.Regexp {
+	s := strings.Split(csv, ",")
+	var fields = make([]*regexp.Regexp, len(s))
+	for i := range fields {
+		fields[i] = regexp.MustCompile(s[i])
+	}
+	return fields
 }
 
 func (c *GlobalConfig) ParseFlags(args []string) {
@@ -68,15 +78,15 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.ConcurrentBatchWrites = fs.Int("concurrent-batch-writes", 10, "Number of batch writes of different tables to clickhouse to run in parallel")
 	c.ConcurrentMysqlDumpSelects = fs.Int("concurrent-mysql-dump-selects", 4, "Number of concurrent select queries to run when dumping mysql db")
 
-	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deuplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
+	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deduplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
-		"*address*,*street*,*secret*,*postal*,*line?,*password*,*salt*,*email*,*longitude*,*latitude*,payment_methods.properties*,payment_methods.*description*,*given_name*,*surname*,*exp_*,*receipt_*",
-		"Comma separated list of field name patterns to anonymize. Supports * and ? syntax, * means 0 or more of any character, ? means exactly one of any character. cool*line? will match cool.something.line1,cool-whatever-line2, etc. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
+		".*(address|street|secret|postal|line.|password|salt|email|longitude|latitude|given_name|surname|\\.exp_|receipt_).*,payment_methods.properties.*,payment_methods.*description.*",
+		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
 
-	c.IgnoredColumnsForDeduplication = strings.Split(*IgnoredColumnsForDeduplication, ",")
-	c.YamlColumns = strings.Split(*YamlColumns, ",")
-	c.AnonymizeFields = strings.Split(*AnonymizeFields, ",")
+	c.IgnoredColumnsForDeduplication = csvToRegexps(*IgnoredColumnsForDeduplication)
+	c.YamlColumns = csvToRegexps(*YamlColumns)
+	c.AnonymizeFields = csvToRegexps(*AnonymizeFields)
 
 	err := ff.Parse(fs, args,
 		ff.WithConfigFileFlag("config"),
