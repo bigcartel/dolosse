@@ -47,5 +47,6 @@ func main() {
 		err_utils.Must(http.ListenAndServe(":3003", promhttp.Handler()))
 	}()
 
-	app.StartSync()
+	go app.StartSync()
+	ui()
 }
