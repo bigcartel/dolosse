@@ -108,7 +108,7 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 				ev, err = parser.Parse(rawEv.RawData)
 
 				if err != nil {
-					panic(err)
+					return err
 				}
 			default:
 				continue
