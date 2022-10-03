@@ -231,7 +231,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	writeCount := 0
 
 	for _, rowInsertData := range *processedRows {
-		if hasDuplicates && duplicatesMap[rowInsertData.EventId] {
+		if rowInsertData.EventAction != "dump" && hasDuplicates && duplicatesMap[rowInsertData.EventId] {
 			Stats.IncrementSkippedPersistedDuplicates()
 			continue
 		}
