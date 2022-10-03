@@ -35,6 +35,8 @@ type GlobalConfig struct {
 	Rewind,
 	RunProfile *bool
 
+	DumpTables map[string]bool
+
 	AnonymizeFields,
 	IgnoredColumnsForDeduplication,
 	YamlColumns []*regexp.Regexp
@@ -78,20 +80,26 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.ConcurrentBatchWrites = fs.Int("concurrent-batch-writes", 10, "Number of batch writes of different tables to clickhouse to run in parallel")
 	c.ConcurrentMysqlDumpSelects = fs.Int("concurrent-mysql-dump-selects", 4, "Number of concurrent select queries to run when dumping mysql db")
 
+	DumpTables := fs.String("force-dump-tables", "", "Comma separate list of tables to force dump")
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deduplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
 		".*(address|street|secret|postal|line.|password|salt|email|longitude|latitude|given_name|surname|\\.exp_|receipt_).*,payment_methods.properties.*,payment_methods.*description.*",
 		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
 
-	c.IgnoredColumnsForDeduplication = csvToRegexps(*IgnoredColumnsForDeduplication)
-	c.YamlColumns = csvToRegexps(*YamlColumns)
-	c.AnonymizeFields = csvToRegexps(*AnonymizeFields)
-
 	err := ff.Parse(fs, args,
 		ff.WithConfigFileFlag("config"),
 		ff.WithConfigFileParser(ff.PlainParser),
 	)
+
+	c.DumpTables = make(map[string]bool)
+	for _, t := range strings.Split(*DumpTables, ",") {
+		c.DumpTables[t] = true
+	}
+
+	c.IgnoredColumnsForDeduplication = csvToRegexps(*IgnoredColumnsForDeduplication)
+	c.YamlColumns = csvToRegexps(*YamlColumns)
+	c.AnonymizeFields = csvToRegexps(*AnonymizeFields)
 
 	if err != nil {
 		if err.Error() != "error parsing commandline arguments: flag: help requested" {

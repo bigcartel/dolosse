@@ -142,8 +142,6 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	}
 
 	insertData.Event[eventCreatedAtColumnName] = timestamp
-	eventId := e.EventId()
-	insertData.Event[eventIdColumnName] = eventId
 
 	if isDuplicate {
 		return insertData, true
@@ -158,6 +156,14 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 	}
 
 	insertData.Id = id
+	var eventId string
+	if e.Action != "dump" {
+		eventId = e.EventId()
+	} else {
+		eventId = fmt.Sprintf("dump:%d#0", id)
+	}
+
+	insertData.Event[eventIdColumnName] = eventId
 	insertData.EventId = eventId
 	insertData.EventTable = tableName
 	insertData.EventCreatedAt = timestamp
