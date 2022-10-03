@@ -479,19 +479,13 @@ func startSync() {
 
 	if *Config.Dump || *Config.DumpImmediately || *Config.Rewind {
 		clickhouseDb.SetGTIDString(minimumStartingGtid)
-		err := startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
-		if err != context.Canceled {
-			log.Panicln(err)
-		}
-	} else {
-		if *Config.StartFromGtid != "" {
-			clickhouseDb.SetGTIDString(*Config.StartFromGtid)
-		}
+	} else if *Config.StartFromGtid != "" {
+		clickhouseDb.SetGTIDString(*Config.StartFromGtid)
+	}
 
-		err := startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
-		if err != context.Canceled {
-			log.Panicln(err)
-		}
+	err := startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
+	if err != context.Canceled {
+		log.Panicln(err)
 	}
 }
 
