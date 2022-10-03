@@ -440,6 +440,31 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	}
 }
 
+func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
+	Config.AnonymizeFields = []*regexp.Regexp{
+		regexp.MustCompile(".*email.*"),
+		regexp.MustCompile(".*password.*"),
+	}
+	password := "test"
+	email := "max@test.com"
+	firstName := "max"
+
+	input := struct {
+		Password  string
+		Email     string
+		Firstname string `yaml:":firstname"`
+	}{password, email, firstName}
+
+	yamlString, err := yaml.Marshal(input)
+	if err != nil {
+		b.Error(err)
+	}
+
+	for n := 0; n < b.N; n++ {
+		parseValue(string(yamlString), schema.TYPE_STRING, "test_table", "yaml_column")
+	}
+}
+
 func TestAnonymizeStringValue(t *testing.T) {
 	yamlColumnSetup()
 	password := "test"

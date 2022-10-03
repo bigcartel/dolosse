@@ -33,7 +33,7 @@ func (f *BatchDuplicatesFilter) TestAndAdd(data string) bool {
 	bfMu.RLock()
 	defer bfMu.RUnlock()
 	// todo cast this without an allocation?
-	return f.f.TestAndAdd([]byte(data))
+	return f.f.TestAndAdd(StringToByteSlice(data))
 }
 
 var bfMu = sync.RWMutex{}

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-faster/city"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
+	"github.com/goccy/go-json"
 	"github.com/goccy/go-yaml"
 	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
@@ -23,7 +23,7 @@ func parseString(value string, tableName string, columnName string) interface{} 
 	if isYamlColumn(tableName, columnName) {
 		y := make(map[string]interface{})
 
-		err := yaml.Unmarshal([]byte(value), &y)
+		err := yaml.Unmarshal(StringToByteSlice(value), &y)
 
 		if err != nil {
 			y["rawYaml"] = value
@@ -34,7 +34,7 @@ func parseString(value string, tableName string, columnName string) interface{} 
 
 		for k, v := range y {
 			delete(y, k)
-			v = anonymizeValue(v, tableName, fmt.Sprintf("%s.%s", columnName, k))
+			v = anonymizeValue(v, tableName, fieldString(columnName, k))
 			y[stripLeadingColon(k)] = v
 		}
 
@@ -46,6 +46,8 @@ func parseString(value string, tableName string, columnName string) interface{} 
 
 	return out
 }
+
+const MysqlDateFormat = "2006-01-02"
 
 func convertMysqlColumnType(value interface{}, columnType int) interface{} {
 	if value == nil {
@@ -64,7 +66,7 @@ func convertMysqlColumnType(value interface{}, columnType int) interface{} {
 	case schema.TYPE_DATE:
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
-			vt, err := time.Parse("2006-01-02", vs)
+			vt, err := time.Parse(MysqlDateFormat, vs)
 			must(err)
 			return vt
 		} else {
@@ -149,8 +151,8 @@ func fieldString(table string, columnPath string) string {
 	return b.String()
 }
 
-func hashString(s *[]byte) string {
-	return strconv.FormatUint(city.CH64(*s), 10)
+func hashString(s []byte) string {
+	return strconv.FormatUint(city.CH64(s), 10)
 }
 
 // sanitize yaml keys that start with colon
@@ -170,22 +172,22 @@ func anonymizeValue(value interface{}, table string, columnPath string) interfac
 	case map[string]interface{}:
 		for k, subv := range v {
 			delete(v, k)
-			subv = anonymizeValue(subv, table, fmt.Sprintf("%s.%s", columnPath, k))
+			subv = anonymizeValue(subv, table, fieldString(columnPath, k))
 
 			v[stripLeadingColon(k)] = subv
 		}
 	case []interface{}:
 		for i := range v {
-			v[i] = anonymizeValue(v[i], table, fmt.Sprintf("%s.%s", columnPath, fmt.Sprint(i)))
+			v[i] = anonymizeValue(v[i], table, fieldString(columnPath, fmt.Sprint(i)))
 		}
 	case string:
 		if anonymize {
-			vp := []byte(v)
-			return hashString(&vp)
+			vp := StringToByteSlice(v)
+			return hashString(vp)
 		}
 	case []byte:
 		if anonymize {
-			return hashString(&v)
+			return hashString(v)
 		}
 	}
 
