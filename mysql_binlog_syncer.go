@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -26,7 +27,18 @@ type MysqlReplicationRowEvent struct {
 }
 
 func (e *MysqlReplicationRowEvent) EventId() string {
-	return e.ServerId + ":" + strconv.FormatInt(e.Gtid, 10) + "#" + strconv.FormatUint(uint64(e.GtidEventCount), 10)
+	gtid := strconv.FormatInt(e.Gtid, 10)
+	gtidCount := strconv.FormatUint(uint64(e.GtidEventCount), 10)
+
+	eid := strings.Builder{}
+	eid.Grow(len(e.ServerId) + len(gtid) + len(gtidCount) + 2)
+	eid.WriteString(e.ServerId)
+	eid.WriteRune(':')
+	eid.WriteString(gtid)
+	eid.WriteRune('#')
+	eid.WriteString(gtidCount)
+
+	return eid.String()
 }
 
 // TODO replace all these events with enum types that are uint8 underneath

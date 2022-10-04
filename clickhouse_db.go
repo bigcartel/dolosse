@@ -55,7 +55,7 @@ func (db *ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 		columnTypes[i] = c.ScanType()
 	}
 
-	scannedRows := make([][]interface{}, 0)
+	scannedRows := make([][]interface{}, 0, 10000)
 
 	makeVarsForRow := func() []interface{} {
 		vars := make([]interface{}, len(columnTypes))
@@ -82,14 +82,13 @@ func (db *ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
 			}
 		}
 
-		var row []interface{}
-		scannedRows = append(scannedRows, append(row, vars...))
+		scannedRows = append(scannedRows, vars)
 	}
 
 	return scannedRows
 }
 
-func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, map[int64]bool) {
+func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, Set[int64]) {
 	queryString := fmt.Sprintf(`
 		SELECT
 		id
@@ -99,16 +98,16 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int6
 	ids := db.Query(queryString, minId, maxId)
 	log.Infoln("number of ids returned", len(ids))
 
-	idsMap := make(map[int64]bool, len(ids))
+	idsSet := make(Set[int64], len(ids))
 
 	for _, row := range ids {
-		idsMap[reflect.ValueOf(row[0]).Int()] = true
+		idsSet.Add(reflect.ValueOf(row[0]).Int())
 	}
 
-	return len(idsMap) > 0, idsMap
+	return len(idsSet) > 0, idsSet
 }
 
-func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, map[string]bool) {
+func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end time.Time) (bool, Set[string]) {
 	queryString := fmt.Sprintf(`
 		SELECT
 		%s
@@ -120,8 +119,7 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end
 
 	duplicates := db.Query(queryString, start.Add(-1*time.Second), end.Add(1*time.Second))
 
-	// TODO is this something where I could re-use memory - would it be beneficial?
-	duplicatesMap := make(map[string]bool)
+	duplicatesMap := make(Set[string], len(duplicates))
 
 	for _, dup := range duplicates {
 		v, ok := dup[0].(string)
@@ -129,7 +127,7 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, start time.Time, end
 			log.Fatalf("Failed converting %v to string", v)
 		}
 
-		duplicatesMap[v] = true
+		duplicatesMap.Add(v)
 	}
 
 	return len(duplicates) > 0, duplicatesMap

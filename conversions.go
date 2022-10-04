@@ -142,6 +142,7 @@ func isYamlColumn(tableName string, columnName string) bool {
 
 func fieldString(table string, columnPath string) string {
 	b := strings.Builder{}
+	b.Grow(len(table) + len(columnPath) + 1)
 	b.WriteString(table)
 	b.WriteString(".")
 	b.WriteString(columnPath)
@@ -179,8 +180,8 @@ func anonymizeValue(value interface{}, table string, columnPath string) interfac
 		}
 	case string:
 		if anonymize {
-			vp := StringToByteSlice(v)
-			return hashString(vp)
+			// not safe to use StringToByteSlice here
+			return hashString([]byte(v))
 		}
 	case []byte:
 		if anonymize {
@@ -198,7 +199,7 @@ func pointerToValue(value reflect.Value) reflect.Value {
 	return pointerValue
 }
 
-func reflectAppend(chColumnType reflect.Type, ary any, val any) (any, error) {
+func reflectAppend(chColumnType reflect.Type, ary any, val any, newSliceLen int) (any, error) {
 	// treat json columns as strings because clickhouse-go's json type conversion isn't perfect
 	if chColumnType.Kind() == reflect.Map {
 		chColumnType = reflect.TypeOf("")
@@ -212,7 +213,7 @@ func reflectAppend(chColumnType reflect.Type, ary any, val any) (any, error) {
 		// could this use a sync.Pool? Only issue is that different slices have different types,
 		// so I might need to make something custom.
 		// Also - set this slice to be set to the size of this batch instead of max batch size
-		reflectAry = reflect.MakeSlice(reflect.SliceOf(chColumnType), 0, *Config.BatchSize)
+		reflectAry = reflect.MakeSlice(reflect.SliceOf(chColumnType), 0, newSliceLen)
 	} else {
 		reflectAry = reflect.ValueOf(ary)
 	}

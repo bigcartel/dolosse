@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func withDbSetup(t *testing.T, f func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb)) {
+func withDbSetup(t testing.TB, f func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb)) {
 	Config.ParseFlags([]string{
 		"--mysql-addr=0.0.0.0:3307",
 		"--mysql-user=root",
@@ -113,7 +115,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 
 	execChStatements(clickhouseConn,
 		`DROP DATABASE IF EXISTS test`,
-		`CREATE DATABASE test`,
+		`CREATE DATABASE IF NOT EXISTS test`,
 		`CREATE TABLE test.test (
 				id Int32,
 				name String,
@@ -154,7 +156,7 @@ func TestReplicationAndDump(t *testing.T) {
 	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 		InitDbs(mysqlConn, clickhouseConn)
 
-		// Unsure why I have to start with ithis insert statement, but replication
+		// Unsure why I have to start with ithis nsert statement, but replication
 		// from GTID event id 1 won't pick up on the first 1 insert after a reset
 		// master for some reason
 		execMysqlStatements(mysqlConn, `
@@ -212,4 +214,47 @@ func TestReplicationAndDump(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 		assert.True(t, clickhouseConn.GetTableDumped("test"))
 	})
+}
+
+func generateBenchMysqlStatements(n int) string {
+	statement := strings.Builder{}
+	statement.Grow(n * 50)
+	for i := 2; i < n; i++ {
+		statement.WriteString("INSERT INTO test (id, name, price, description, created_at) VALUES (")
+		statement.WriteString(strconv.Itoa(i))
+		statement.WriteString(`,"replicated",
+			"1.77",
+			"replicated desc",
+			NOW());`)
+	}
+
+	return statement.String()
+}
+
+func BenchmarkFullRun(b *testing.B) {
+	for n := 0; n < b.N; n++ {
+		withDbSetup(b, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
+			Stats.Init(true)
+			InitDbs(mysqlConn, clickhouseConn)
+
+			// Unsure why I have to start with ithis nsert statement, but replication
+			// from GTID event id 1 won't pick up on the first 1 insert after a reset
+			// master for some reason
+			statementCount := 30000
+			execMysqlStatements(mysqlConn, generateBenchMysqlStatements(statementCount))
+
+			go func() {
+				for Stats.DeliveredRows < uint64(statementCount)-1 {
+					time.Sleep(200 * time.Millisecond)
+				}
+
+				time.Sleep(500 * time.Millisecond)
+
+				State.cancel()
+				time.Sleep(100 * time.Millisecond)
+			}()
+
+			startTestSync(clickhouseConn)
+		})
+	}
 }

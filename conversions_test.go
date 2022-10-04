@@ -51,6 +51,13 @@ func makeColumnSet() *ChColumnSet {
 	}
 }
 
+func BenchmarkReplicationRowEventEventId(b *testing.B) {
+	event := makeRowEvent()
+	for i := 0; i < b.N; i++ {
+		event.EventId()
+	}
+}
+
 func TestEventToClickhouseRowData(t *testing.T) {
 	yamlColumnSetup()
 	columns := makeColumnSet()

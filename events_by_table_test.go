@@ -18,6 +18,6 @@ func BenchmarkEventByTableReset(b *testing.B) {
 	}
 
 	for n := 0; n < b.N; n++ {
-		ebt.Reset()
+		ebt.Reset(true)
 	}
 }

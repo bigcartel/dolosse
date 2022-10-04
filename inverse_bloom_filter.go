@@ -41,6 +41,7 @@ var bfMu = sync.RWMutex{}
 func (fi *BatchDuplicatesFilter) snapshotState() {
 	bfMu.Lock()
 	sb := strings.Builder{}
+	sb.Grow(BatchDuplicatesFilterSize)
 	w := lz4.NewWriter(&sb)
 	unwrap(fi.f.WriteTo(w))
 	w.Close()

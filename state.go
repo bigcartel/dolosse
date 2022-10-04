@@ -45,6 +45,8 @@ func NewGlobalState() *GlobalState {
 	return &s
 }
 
+const BatchDuplicatesFilterSize = 100000
+
 func (s *GlobalState) Init() {
 	*s = *NewGlobalState()
 
@@ -60,7 +62,7 @@ func (s *GlobalState) Init() {
 
 	// a this filter size of 1000000 gets pretty close to the maximum value size for a column
 	// in clickhouse after being compressed with lz4. Increase with care
-	s.batchDuplicatesFilter = NewBatchDuplicatesFilter(1000000)
+	s.batchDuplicatesFilter = NewBatchDuplicatesFilter(BatchDuplicatesFilterSize)
 	s.batchDuplicatesFilter.loadState(&clickhouseDb)
 	s.chColumns.Sync(clickhouseDb)
 }

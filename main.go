@@ -78,8 +78,6 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 
 			if isDup {
 				Stats.IncrementSkippedRowLevelDuplicates()
-			} else if event.Action != "dump" && State.batchDuplicatesFilter.TestAndAdd(event.EventId()) {
-				Stats.IncrementSkippedLocallyFilteredDuplicates()
 			} else {
 				output <- insertData
 			}
@@ -221,7 +219,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	minMaxValues := getMinMaxValues(processedRows)
 
 	hasStoredIds := false
-	var storedIdsMap map[int64]bool
+	var storedIdsMap Set[int64]
 
 	if minMaxValues.maxDumpId > 0 {
 		hasStoredIds, storedIdsMap = clickhouseDb.QueryIdRange(tableWithDb,
@@ -237,7 +235,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	writeCount := 0
 
 	for _, rowInsertData := range *processedRows {
-		if rowInsertData.EventAction != "dump" && hasDuplicates && duplicatesMap[rowInsertData.EventId] {
+		if rowInsertData.EventAction != "dump" && hasDuplicates && duplicatesMap.Contains(rowInsertData.EventId) {
 			Stats.IncrementSkippedPersistedDuplicates()
 			continue
 		}
@@ -246,7 +244,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 			log.Panicln(rowInsertData)
 		}
 
-		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap[rowInsertData.Id] {
+		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap.Contains(rowInsertData.Id) {
 			Stats.IncrementSkippedDumpDuplicates()
 			continue
 		}
@@ -255,7 +253,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 
 		for i, col := range chColumns {
 			val := rowInsertData.Event[col.Name]
-			newColumnAry, err := reflectAppend(col.Type, batchColumnArrays[i], val)
+			newColumnAry, err := reflectAppend(col.Type, batchColumnArrays[i], val, len(*processedRows))
 
 			if err != nil {
 				log.Infoln(err)
@@ -354,13 +352,15 @@ func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
 
 type EventsByTable map[string]*[]*RowInsertData
 
-func (es *EventsByTable) Reset() {
+func (es *EventsByTable) Reset(recycleSlices bool) {
 	for k, vSlice := range *es {
 		for _, v := range *vSlice {
 			RowInsertDataPool.Put(v)
 		}
-		newSlice := (*vSlice)[:0]
-		(*es)[k] = &newSlice
+		if recycleSlices {
+			newSlice := (*vSlice)[:0]
+			(*es)[k] = &newSlice
+		}
 	}
 }
 
@@ -370,24 +370,41 @@ func batchWrite() {
 	eventsByTable := make(EventsByTable)
 	var lastGtidSet string
 	var timer *time.Timer
-	var counter int
+	var lastEventsInBatchCount,
+		eventsInBatchCount,
+		batchNumber int
 
 	resetCountAndTimer := func() {
 		timer = time.NewTimer(*Config.BatchWriteInterval)
-		counter = 0
+		lastEventsInBatchCount = eventsInBatchCount
+		eventsInBatchCount = 0
 	}
 
 	resetCountAndTimer()
 
 	deliver := func() {
-		State.batchDuplicatesFilter.snapshotState()
+		// snapshot every 60 seconds with default settings
+		shouldSnapshotDuplicatesFilter := batchNumber%6 == 0
+
+		if shouldSnapshotDuplicatesFilter {
+			State.batchDuplicatesFilter.snapshotState()
+		}
 
 		// Could also get delay by peeking events periodicially to avoid computing it
 		delay := replicationDelay.Load()
 		log.Infoln("replication delay is", delay, "seconds")
 
 		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
-		eventsByTable.Reset()
+
+		if shouldSnapshotDuplicatesFilter {
+			go State.batchDuplicatesFilter.writeState(&clickhouseDb)
+		}
+		batchNumber++
+		// if the batch sizes are relatively consistent, we want to recycle slices,
+		// if the difference between previous and current batch size is large enough
+		// we want to re-allocate to avoid ever expanding memory usage
+		recycleSlices := lastEventsInBatchCount-eventsInBatchCount < 10000
+		eventsByTable.Reset(recycleSlices)
 		Stats.Print()
 		resetCountAndTimer()
 
@@ -404,7 +421,7 @@ func batchWrite() {
 			log.Infoln("Closing...")
 			return
 		case <-timer.C:
-			if counter > 0 {
+			if eventsInBatchCount > 0 {
 				deliver()
 			} else {
 				resetCountAndTimer()
@@ -412,6 +429,11 @@ func batchWrite() {
 		case gtid := <-State.latestProcessingGtid:
 			lastGtidSet = gtid
 		case e := <-State.batchWrite:
+			if e.EventAction != "dump" && State.batchDuplicatesFilter.TestAndAdd(e.EventId) {
+				Stats.IncrementSkippedLocallyFilteredDuplicates()
+				continue
+			}
+
 			if eventsByTable[e.EventTable] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
@@ -422,10 +444,10 @@ func batchWrite() {
 			events := append(*eventsByTable[e.EventTable], e)
 			eventsByTable[e.EventTable] = &events
 
-			if counter == *Config.BatchSize {
+			if eventsInBatchCount == *Config.BatchSize {
 				deliver()
 			} else {
-				counter++
+				eventsInBatchCount++
 			}
 		}
 	}
@@ -454,8 +476,6 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 	}
 
 	wg.Wait()
-
-	go State.batchDuplicatesFilter.writeState(&clickhouseDb)
 
 	if lastGtidSet != "" {
 		go clickhouseDb.SetGTIDString(lastGtidSet)
