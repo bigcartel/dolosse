@@ -3,12 +3,12 @@ package main
 import "sync"
 
 type ConcurrentMap[V any] struct {
-	m sync.Map
+	sync.Map
 }
 
 func NewConcurrentMap[V any]() ConcurrentMap[V] {
 	return ConcurrentMap[V]{
-		m: sync.Map{},
+		sync.Map{},
 	}
 }
 
@@ -17,7 +17,7 @@ func (m *ConcurrentMap[V]) Reset() {
 }
 
 func (m *ConcurrentMap[V]) Get(k string) *V {
-	v, _ := (m.m).Load(k)
+	v, _ := m.Load(k)
 	if v != nil {
 		return v.(*V)
 	} else {
@@ -26,5 +26,5 @@ func (m *ConcurrentMap[V]) Get(k string) *V {
 }
 
 func (m *ConcurrentMap[V]) Set(k string, v *V) {
-	m.m.Store(k, v)
+	m.Store(k, v)
 }

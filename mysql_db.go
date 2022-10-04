@@ -77,7 +77,7 @@ func withMysqlConnection[T any](f func(c *client.Conn) T) T {
 func DumpMysqlDb(chConn *ClickhouseDb, forceDump bool) {
 	var wg sync.WaitGroup
 	working := make(chan bool, *Config.ConcurrentMysqlDumpSelects)
-	State.chColumns.m.m.Range(func(k, _ any) bool {
+	State.chColumns.m.Range(func(k, _ any) bool {
 		table := k.(string)
 		if State.dumpingTables.Get(table) == nil && Config.DumpTables[table] || forceDump || !chConn.GetTableDumped(table) {
 			log.Infof("Begin dump of %s", table)

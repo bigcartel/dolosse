@@ -101,7 +101,7 @@ func parseValue(value interface{}, columnType int, tableName string, columnName 
 
 var regexpMatchCache = NewConcurrentMap[ConcurrentMap[bool]]()
 
-func memoizedStringMatch(v, matcher string, callback func() bool) bool {
+func memoizedStringMatch(v, matcher string, callback func(string) bool) bool {
 	var cachedMatch *bool
 	matcherCache := regexpMatchCache.Get(matcher)
 	if matcherCache != nil {
@@ -116,7 +116,7 @@ func memoizedStringMatch(v, matcher string, callback func() bool) bool {
 		regexpMatchCache.Set(matcher, &newCache)
 	}
 
-	matched := callback()
+	matched := callback(v)
 	matcherCache.Set(v, &matched)
 
 	return matched
@@ -124,10 +124,7 @@ func memoizedStringMatch(v, matcher string, callback func() bool) bool {
 
 func memoizedRegexpsMatch(s string, regexps []*regexp.Regexp) bool {
 	for _, r := range regexps {
-		match := memoizedStringMatch(s, r.String(), func() bool {
-			return r.MatchString(s)
-		})
-		if match {
+		if memoizedStringMatch(s, r.String(), r.MatchString) {
 			return true
 		}
 	}

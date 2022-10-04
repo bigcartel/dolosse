@@ -373,16 +373,6 @@ func yamlColumnSetup() {
 	Config.YamlColumns = []*regexp.Regexp{regexp.MustCompile("test_table.yaml_column")}
 }
 
-func BenchmarkEventToClickhouseRowData(b *testing.B) {
-	yamlColumnSetup()
-	columns := makeColumnSet()
-	rowEvent := makeRowEvent()
-
-	for n := 0; n < b.N; n++ {
-		eventToClickhouseRowData(rowEvent, columns)
-	}
-}
-
 func TestParseValueUint8Array(t *testing.T) {
 	outValue := "test string"
 	inValue := []uint8(outValue)
@@ -440,6 +430,21 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	}
 }
 
+func TestAnonymizeStringValue(t *testing.T) {
+	yamlColumnSetup()
+	password := "test"
+	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
+	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+}
+
+func TestAnonymizeByteSlice(t *testing.T) {
+	yamlColumnSetup()
+	password := []byte("test")
+	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
+
+	assert.NotEqual(t, out, string(password), "expected password byte slice to be anonymized")
+}
+
 func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
 	Config.AnonymizeFields = []*regexp.Regexp{
 		regexp.MustCompile(".*email.*"),
@@ -465,17 +470,22 @@ func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
 	}
 }
 
-func TestAnonymizeStringValue(t *testing.T) {
+func BenchmarkEventToClickhouseRowData(b *testing.B) {
 	yamlColumnSetup()
-	password := "test"
-	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
-	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+	columns := makeColumnSet()
+	rowEvent := makeRowEvent()
+
+	for n := 0; n < b.N; n++ {
+		eventToClickhouseRowData(rowEvent, columns)
+	}
 }
 
-func TestAnonymizeByteSlice(t *testing.T) {
-	yamlColumnSetup()
-	password := []byte("test")
-	out := parseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
+func BenchmarkIsAnonymizedField(b *testing.B) {
+	Config.AnonymizeFields = []*regexp.Regexp{
+		regexp.MustCompile(".*email.*"),
+	}
 
-	assert.NotEqual(t, out, string(password), "expected password byte slice to be anonymized")
+	for n := 0; n < b.N; n++ {
+		isAnonymizedField("email.yes")
+	}
 }
