@@ -11,7 +11,7 @@ import (
 	boom "github.com/tylertreat/BoomFilters"
 )
 
-type GetSetBloomFilterState = interface {
+type GetSetBatchDuplicatesFilterState = interface {
 	GetStateString(string) string
 	SetStateString(string, string)
 }
@@ -51,11 +51,11 @@ func (fi *BatchDuplicatesFilter) snapshotState() {
 
 const batchDuplicatesFilterKey = "batch_duplicates_state.dat.lz4"
 
-func (f *BatchDuplicatesFilter) resetState(ch GetSetBloomFilterState) {
+func (f *BatchDuplicatesFilter) resetState(ch GetSetBatchDuplicatesFilterState) {
 	ch.SetStateString(batchDuplicatesFilterKey, "")
 }
 
-func (f *BatchDuplicatesFilter) loadState(ch GetSetBloomFilterState) {
+func (f *BatchDuplicatesFilter) loadState(ch GetSetBatchDuplicatesFilterState) {
 	s := ch.GetStateString(batchDuplicatesFilterKey)
 	r := lz4.NewReader(strings.NewReader(s))
 
@@ -72,7 +72,7 @@ func (f *BatchDuplicatesFilter) loadState(ch GetSetBloomFilterState) {
 	log.Debugf("Read %d bytes for deduplication state", bytes)
 }
 
-func (fi *BatchDuplicatesFilter) writeState(ch GetSetBloomFilterState) {
+func (fi *BatchDuplicatesFilter) writeState(ch GetSetBatchDuplicatesFilterState) {
 	if fi.stateSnapshot == "" {
 		return
 	}
