@@ -147,13 +147,8 @@ func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet)
 
 	insertData.Event[actionColumnName] = e.Action
 
-	var id int64
-	maybeInt := reflect.ValueOf(insertData.Event["id"])
-	if maybeInt.CanInt() {
-		id = reflect.ValueOf(insertData.Event["id"]).Int()
-	}
-
-	insertData.Id = id
+	id := toInt64(insertData.Event["id"])
+	insertData.Id = toInt64(id)
 	var eventId string
 	if e.Action != "dump" {
 		eventId = e.EventId()

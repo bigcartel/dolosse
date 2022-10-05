@@ -101,7 +101,7 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int6
 	idsSet := make(Set[int64], len(ids))
 
 	for _, row := range ids {
-		idsSet.Add(reflect.ValueOf(row[0]).Int())
+		idsSet.Add(toInt64(row[0]))
 	}
 
 	return len(idsSet) > 0, idsSet

@@ -91,7 +91,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 			USE test;
 			DROP TABLE IF EXISTS test;
 			CREATE TABLE test (
-				id int NOT NULL AUTO_INCREMENT,
+				id int unsigned NOT NULL AUTO_INCREMENT,
 				name varchar(100) NOT NULL DEFAULT '',
 				price decimal(10,2) NOT NULL DEFAULT '0.00',
 				visits int NOT NULL DEFAULT 0,
