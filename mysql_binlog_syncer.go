@@ -30,13 +30,14 @@ type PerSecondEventCountMap = map[uint64]uint32
 
 func startReplication(gtidSet mysql.GTIDSet) error {
 	cfg := replication.BinlogSyncerConfig{
-		ServerID:        uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
-		HeartbeatPeriod: 60 * time.Second,
-		Host:            *Config.MysqlAddr,
-		User:            *Config.MysqlUser,
-		Password:        *Config.MysqlPassword,
-		Flavor:          "mysql",
-		RawModeEnabled:  true,
+		ServerID:         uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
+		HeartbeatPeriod:  60 * time.Second,
+		Host:             *Config.MysqlAddr,
+		User:             *Config.MysqlUser,
+		Password:         *Config.MysqlPassword,
+		Flavor:           "mysql",
+		DisableRetrySync: true,
+		RawModeEnabled:   true,
 	}
 
 	parser := replication.NewBinlogParser()

@@ -104,7 +104,6 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowI
 }
 
 func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]*RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
-
 	minMaxValues := getMinMaxValues(processedRows)
 
 	hasStoredIds := false
@@ -395,9 +394,28 @@ func startSync() {
 		clickhouseDb.SetGTIDString(*Config.StartFromGtid)
 	}
 
-	err := startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
+	retryCount := 0
+
+	var err error
+	var errWas error
+	for retryCount < 5 {
+		errWas = err
+		err = startReplication(clickhouseDb.GetGTIDSet(minimumStartingGtid))
+
+		if errWas == nil && err != nil {
+			retryCount = 0
+		}
+
+		if err == context.Canceled {
+			break
+		} else {
+			time.Sleep(1)
+			retryCount++
+		}
+	}
+
 	if err != context.Canceled {
-		log.Panicln(err)
+		log.Fatal("Replication failed after 5 retries: ", err)
 	}
 }
 
