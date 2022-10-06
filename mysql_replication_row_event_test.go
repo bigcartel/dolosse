@@ -10,23 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func makeEvent() MysqlReplicationRowEvent {
-	return MysqlReplicationRowEvent{
-		ServerId:       "server1",
-		Gtid:           88,
-		GtidEventCount: 1,
-	}
-}
-
-func TestEventId(t *testing.T) {
-	e := makeEvent()
-	assert.Equal(t, e.EventId(), "server1:88#1")
+func TestEventIdString(t *testing.T) {
+	assert.Equal(t, EventIdString("server1", 88, 1), "server1:88#1")
 }
 
 func BenchmarkEventEventId(b *testing.B) {
-	e := makeEvent()
 	for i := 0; i < b.N; i++ {
-		e.EventId()
+		EventIdString("server1", 88, 1)
 	}
 }
 

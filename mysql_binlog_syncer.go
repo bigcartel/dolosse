@@ -56,8 +56,8 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 	return withMysqlConnection(func(conn *client.Conn) error {
 		var action string
 		var serverUuid string
-		var gtidEventCount uint32
-		var eventGtid int64
+		var EventTransactionEventNumber uint32
+		var eventTransactionId uint64
 		var rawEventSid []byte
 		var txnCommitTime time.Time
 
@@ -104,8 +104,8 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 			// 	lastGTIDString = e.GTID.String()
 			case *replication.GTIDEvent:
 				txnCommitTime = e.OriginalCommitTime()
-				eventGtid = e.GNO
-				gtidEventCount = 0
+				eventTransactionId = uint64(e.GNO)
+				EventTransactionEventNumber = 0
 
 				if !bytes.Equal(e.SID, rawEventSid) {
 					rawEventSid = e.SID
@@ -141,17 +141,17 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 				table := getMysqlTable(string(e.Table.Schema), string(e.Table.Table))
 
 				rowE := MysqlReplicationRowEvent{
-					Table:          table,
-					Rows:           e.Rows,
-					Action:         action,
-					Timestamp:      txnCommitTime,
-					ServerId:       serverUuid,
-					GtidEventCount: gtidEventCount,
-					Gtid:           eventGtid,
+					Table:                  table,
+					Rows:                   e.Rows,
+					Action:                 action,
+					Timestamp:              txnCommitTime,
+					ServerId:               serverUuid,
+					TransactionEventNumber: EventTransactionEventNumber,
+					TransactionId:          eventTransactionId,
 				}
 
 				OnRow(&rowE)
-				gtidEventCount++
+				EventTransactionEventNumber++
 			}
 
 			updateReplicationDelay(ev.Header.Timestamp)
