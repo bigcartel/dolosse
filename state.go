@@ -24,6 +24,7 @@ type GlobalState struct {
 	mysqlColumns          ConcurrentMap[*schema.Table]
 	dumpingTables         ConcurrentMap[struct{}]
 	batchDuplicatesFilter BatchDuplicatesFilter
+	cachedMatchers        CachedMatchers
 }
 
 func NewGlobalState() *GlobalState {
@@ -41,6 +42,7 @@ func NewGlobalState() *GlobalState {
 	s.latestProcessingGtid = make(chan string)
 	s.dumpingTables = NewConcurrentMap[struct{}]()
 	s.mysqlColumns = NewConcurrentMap[*schema.Table]()
+	s.cachedMatchers = NewCachedMatchers()
 
 	return &s
 }

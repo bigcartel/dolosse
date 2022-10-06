@@ -121,8 +121,8 @@ func TestParseBadYaml(t *testing.T) {
 }
 
 func yamlColumnSetup() {
-	regexpMatchCache.Reset()
 	Config.YamlColumns = []*regexp.Regexp{regexp.MustCompile("test_table.yaml_column")}
+	State = *NewGlobalState()
 }
 
 func TestParseValueUint8Array(t *testing.T) {

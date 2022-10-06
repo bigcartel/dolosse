@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -111,46 +110,12 @@ func parseValue(value interface{}, columnType int, tableName string, columnName 
 	}
 }
 
-// TODO make this a struct that's a member of State
-var regexpMatchCache = NewConcurrentMap[ConcurrentMap[bool]]()
-
-func memoizedStringMatch(v, matcher string, callback func(string) bool) bool {
-	var cachedMatch *bool
-	matcherCache := regexpMatchCache.Get(matcher)
-	if matcherCache != nil {
-		cachedMatch = matcherCache.Get(v)
-
-		if cachedMatch != nil {
-			return *cachedMatch
-		}
-	} else {
-		newCache := NewConcurrentMap[bool]()
-		matcherCache = &newCache
-		regexpMatchCache.Set(matcher, &newCache)
-	}
-
-	matched := callback(v)
-	matcherCache.Set(v, &matched)
-
-	return matched
-}
-
-func memoizedRegexpsMatch(s string, regexps []*regexp.Regexp) bool {
-	for _, r := range regexps {
-		if memoizedStringMatch(s, r.String(), r.MatchString) {
-			return true
-		}
-	}
-
-	return false
-}
-
 func isAnonymizedField(s string) bool {
-	return memoizedRegexpsMatch(s, Config.AnonymizeFields)
+	return State.cachedMatchers.MemoizedRegexpsMatch(s, Config.AnonymizeFields)
 }
 
 func isYamlColumn(tableName string, columnName string) bool {
-	return memoizedRegexpsMatch(fieldString(tableName, columnName), Config.YamlColumns)
+	return State.cachedMatchers.MemoizedRegexpsMatch(fieldString(tableName, columnName), Config.YamlColumns)
 }
 
 func fieldString(table string, columnPath string) string {

@@ -83,7 +83,7 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 		if columns.columnLookup[columnName] {
 			if isDuplicate &&
 				hasPreviousEvent &&
-				!memoizedRegexpsMatch(columnName, Config.IgnoredColumnsForDeduplication) &&
+				!State.cachedMatchers.MemoizedRegexpsMatch(columnName, Config.IgnoredColumnsForDeduplication) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
 				isDuplicate = false
 			}
