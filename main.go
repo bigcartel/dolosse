@@ -20,8 +20,6 @@ import (
 
 type LookupMap map[string]bool
 
-type RowData map[string]interface{}
-
 type ClickhouseBatchColumns = []interface{}
 type ClickhouseBatchColumnsByTable = map[string]ClickhouseBatchColumns
 type ClickhouseBatchRow struct {

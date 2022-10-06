@@ -7,6 +7,8 @@ import (
 	"golang.org/x/exp/maps"
 )
 
+type RowData map[string]interface{}
+
 type RowInsertData struct {
 	Id             int64
 	EventTable     string
