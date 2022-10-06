@@ -6,15 +6,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"reflect"
 	"runtime"
-	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/pkg/profile"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"golang.org/x/exp/maps"
 
 	"sync"
 
@@ -32,41 +29,12 @@ type ClickhouseBatchRow struct {
 	Table         string
 }
 
-type RowInsertData struct {
-	Id             int64
-	EventTable     string
-	EventCreatedAt time.Time
-	EventAction    string
-	EventId        string
-	Event          RowData
-}
-
-func (d *RowInsertData) Reset() {
-	maps.Clear(d.Event)
-}
-
-var RowInsertDataPool = sync.Pool{
-	New: func() any {
-		insertData := new(RowInsertData)
-		insertData.Event = make(RowData, 20)
-		return insertData
-	},
-}
-
-func gtidRangeString(sid string, gtid int64) string {
-	return sid + ":1-" + strconv.FormatInt(gtid, 10)
-}
-
 func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *RowInsertData) {
 	for {
 		select {
 		case <-State.ctx.Done():
 			return
 		case event := <-input:
-			if event.Action != "dump" && event.ServerId != "" {
-				State.latestProcessingGtid <- gtidRangeString(event.ServerId, event.Gtid)
-			}
-
 			columns, hasColumns := State.chColumns.ColumnsForTable(event.Table.Name)
 
 			if !hasColumns {
@@ -74,7 +42,7 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 				continue
 			}
 
-			insertData, isDup := eventToClickhouseRowData(event, columns)
+			insertData, isDup := event.ToClickhouseRowData(columns)
 
 			if isDup {
 				Stats.IncrementSkippedRowLevelDuplicates()
@@ -91,78 +59,6 @@ func startProcessEventsWorkers() {
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go processEventWorker(State.processRows, State.batchWrite)
 	}
-}
-
-type IsDuplicate bool
-
-// TODO test with all types we care about - yaml conversion, etc.
-// dedupe for yaml columns according to filtered values?
-func eventToClickhouseRowData(e *MysqlReplicationRowEvent, columns *ChColumnSet) (*RowInsertData, IsDuplicate) {
-	insertData := RowInsertDataPool.Get().(*RowInsertData)
-	insertData.Reset()
-
-	var previousRow []interface{}
-	tableName := e.Table.Name
-	hasPreviousEvent := len(e.Rows) == 2
-
-	newEventIdx := len(e.Rows) - 1
-
-	if hasPreviousEvent {
-		previousRow = e.Rows[0]
-	}
-	row := e.Rows[newEventIdx]
-
-	isDuplicate := false
-	if e.Action == "update" {
-		isDuplicate = true
-	}
-
-	for i, c := range e.Table.Columns {
-		columnName := c.Name
-		if columns.columnLookup[columnName] {
-			if isDuplicate &&
-				hasPreviousEvent &&
-				!memoizedRegexpsMatch(columnName, Config.IgnoredColumnsForDeduplication) &&
-				!reflect.DeepEqual(row[i], previousRow[i]) {
-				isDuplicate = false
-			}
-
-			convertedValue := parseValue(row[i], c.Type, tableName, columnName)
-			insertData.Event[c.Name] = convertedValue
-		}
-	}
-
-	var timestamp time.Time
-	if !e.Timestamp.IsZero() {
-		timestamp = e.Timestamp
-	} else {
-		timestamp = time.Now()
-	}
-
-	insertData.Event[eventCreatedAtColumnName] = timestamp
-
-	if isDuplicate {
-		return insertData, true
-	}
-
-	insertData.Event[actionColumnName] = e.Action
-
-	id := toInt64(insertData.Event["id"])
-	insertData.Id = toInt64(id)
-	var eventId string
-	if e.Action != "dump" {
-		eventId = e.EventId()
-	} else {
-		eventId = fmt.Sprintf("dump:%d#0", id)
-	}
-
-	insertData.Event[eventIdColumnName] = eventId
-	insertData.EventId = eventId
-	insertData.EventTable = tableName
-	insertData.EventCreatedAt = timestamp
-	insertData.EventAction = e.Action
-
-	return insertData, false
 }
 
 func OnRow(e *MysqlReplicationRowEvent) {
@@ -363,19 +259,20 @@ func batchWrite() {
 	clickhouseDb := unwrap(establishClickhouseConnection())
 
 	eventsByTable := make(EventsByTable)
-	var lastGtidSet string
+	var firstGtidInBatch string
 	var timer *time.Timer
 	var lastEventsInBatchCount,
 		eventsInBatchCount,
 		batchNumber int
 
-	resetCountAndTimer := func() {
+	resetBatch := func() {
+		firstGtidInBatch = ""
 		timer = time.NewTimer(*Config.BatchWriteInterval)
 		lastEventsInBatchCount = eventsInBatchCount
 		eventsInBatchCount = 0
 	}
 
-	resetCountAndTimer()
+	resetBatch()
 
 	deliver := func() {
 		// snapshot every 60 seconds with default settings
@@ -389,7 +286,7 @@ func batchWrite() {
 		delay := replicationDelay.Load()
 		log.Infoln("replication delay is", delay, "seconds")
 
-		deliverBatch(clickhouseDb, eventsByTable, lastGtidSet)
+		deliverBatch(clickhouseDb, eventsByTable, firstGtidInBatch)
 
 		if shouldSnapshotDuplicatesFilter {
 			go State.batchDuplicatesFilter.writeState(&clickhouseDb)
@@ -401,7 +298,7 @@ func batchWrite() {
 		recycleSlices := lastEventsInBatchCount-eventsInBatchCount < 10000
 		eventsByTable.Reset(recycleSlices)
 		Stats.Print()
-		resetCountAndTimer()
+		resetBatch()
 
 		if !State.initiatedDump.Load() && *Config.StartFromGtid == "" && (delay < 10 || *Config.DumpImmediately) {
 			State.initiatedDump.Store(true)
@@ -419,14 +316,16 @@ func batchWrite() {
 			if eventsInBatchCount > 0 {
 				deliver()
 			} else {
-				resetCountAndTimer()
+				resetBatch()
 			}
-		case gtid := <-State.latestProcessingGtid:
-			lastGtidSet = gtid
 		case e := <-State.batchWrite:
 			if e.EventAction != "dump" && State.batchDuplicatesFilter.TestAndAdd(e.EventId) {
 				Stats.IncrementSkippedLocallyFilteredDuplicates()
 				continue
+			}
+
+			if firstGtidInBatch == "" && !e.RawEvent.IsDumpEvent() {
+				firstGtidInBatch = e.RawEvent.GtidRangeString()
 			}
 
 			if eventsByTable[e.EventTable] == nil {

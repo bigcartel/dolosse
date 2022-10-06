@@ -111,6 +111,7 @@ func parseValue(value interface{}, columnType int, tableName string, columnName 
 	}
 }
 
+// TODO make this a struct that's a member of State
 var regexpMatchCache = NewConcurrentMap[ConcurrentMap[bool]]()
 
 func memoizedStringMatch(v, matcher string, callback func(string) bool) bool {

@@ -11,6 +11,9 @@ import (
 	boom "github.com/tylertreat/BoomFilters"
 )
 
+// the whole motivating reason for this to store in clickhouse is to improve performance on a rewind.
+// I'm not sure that's great or worth it.
+// If we really want to do local persisted dedupe I think there are other approaches.
 type GetSetBatchDuplicatesFilterState = interface {
 	GetStateString(string) string
 	SetStateString(string, string)

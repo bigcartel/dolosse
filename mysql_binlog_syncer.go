@@ -3,49 +3,14 @@ package main
 import (
 	"bytes"
 	"math/rand"
-	"strconv"
-	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/replication"
-	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
-)
-
-type MysqlReplicationRowEvent struct {
-	Table          *schema.Table
-	Rows           [][]interface{}
-	Action         string
-	Timestamp      time.Time
-	ServerId       string
-	GtidEventCount uint32
-	Gtid           int64
-}
-
-func (e *MysqlReplicationRowEvent) EventId() string {
-	gtid := strconv.FormatInt(e.Gtid, 10)
-	gtidCount := strconv.FormatUint(uint64(e.GtidEventCount), 10)
-
-	eid := strings.Builder{}
-	eid.Grow(len(e.ServerId) + len(gtid) + len(gtidCount) + 2)
-	eid.WriteString(e.ServerId)
-	eid.WriteRune(':')
-	eid.WriteString(gtid)
-	eid.WriteRune('#')
-	eid.WriteString(gtidCount)
-
-	return eid.String()
-}
-
-// TODO replace all these events with enum types that are uint8 underneath
-const (
-	UpdateAction = "update"
-	InsertAction = "insert"
-	DeleteAction = "delete"
 )
 
 var replicationDelay = atomic.Uint32{}
