@@ -109,32 +109,35 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	hasStoredIds := false
 	var storedIdsMap Set[int64]
 
-	if minMaxValues.maxDumpId > 0 {
+	if minMaxValues.MinDumpId > 0 {
 		hasStoredIds, storedIdsMap = clickhouseDb.QueryIdRange(tableWithDb,
-			minMaxValues.minDumpId,
-			minMaxValues.maxDumpId)
+			minMaxValues.MinDumpId,
+			minMaxValues.MaxDumpId)
 	}
 
-	hasDuplicates, duplicatesMap := clickhouseDb.QueryDuplicates(tableWithDb,
-		minMaxValues.minCreatedAt,
-		minMaxValues.maxCreatedAt)
+	hasDuplicates, duplicatesMap := clickhouseDb.QueryDuplicates(tableWithDb, minMaxValues)
 
 	batchColumnArrays := make(ClickhouseBatchColumns, len(chColumns))
 	writeCount := 0
 
 	for _, rowInsertData := range *processedRows {
-		if rowInsertData.EventAction != "dump" && hasDuplicates && duplicatesMap.Contains(rowInsertData.EventId) {
-			Stats.IncrementSkippedPersistedDuplicates()
+		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap.Contains(rowInsertData.Id) {
+			Stats.IncrementSkippedDumpDuplicates()
+			continue
+		}
+
+		if hasDuplicates && duplicatesMap.Contains(rowInsertData.DedupeKey()) {
+			if rowInsertData.EventAction != "dump" {
+				Stats.IncrementSkippedPersistedDuplicates()
+			} else {
+				Stats.IncrementSkippedDumpDuplicates()
+			}
+
 			continue
 		}
 
 		if rowInsertData.EventCreatedAt.Year() == 1 {
 			log.Panicln(rowInsertData)
-		}
-
-		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap.Contains(rowInsertData.Id) {
-			Stats.IncrementSkippedDumpDuplicates()
-			continue
 		}
 
 		writeCount++
@@ -188,53 +191,52 @@ func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchCol
 	}
 }
 
-type minMaxValues struct {
-	minCreatedAt time.Time
-	maxCreatedAt time.Time
-	minDumpId    int64
-	maxDumpId    int64
+type MinMaxValues struct {
+	MinDumpId,
+	MaxDumpId int64
+	ValuesByServerId map[string]struct {
+		MinTransactionId,
+		MaxTransactionId uint64
+	}
 }
 
-func getMinMaxValues(rows *[]*RowInsertData) minMaxValues {
-	minCreatedAt := time.Time{}
-	maxCreatedAt := time.Time{}
-	var minDumpId int64 = 0
-	var maxDumpId int64 = 0
+type MinMaxValuesMap map[string]struct {
+	MinTransactionId,
+	MaxTransactionId uint64
+}
+
+func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
+	valuesByServerId := make(MinMaxValuesMap, 1)
+	var minDumpId,
+		maxDumpId int64
 
 	for _, r := range *rows {
-		// we only care about min and max ids of dump events
-		// this is important since dump is unique in that ids
-		// are sequential
+		comparingTransactionId := r.TransactionId
+		currentMinMax := valuesByServerId[r.ServerId]
+
 		if r.EventAction == "dump" {
-			if minDumpId == 0 {
-				minDumpId = r.Id
-			} else if minDumpId > r.Id {
+			if minDumpId == 0 || minDumpId > r.Id {
 				minDumpId = r.Id
 			}
-
 			if maxDumpId < r.Id {
 				maxDumpId = r.Id
 			}
 		} else {
-			comparingCreatedAt := r.EventCreatedAt
-
-			if minCreatedAt.Year() == 1 {
-				minCreatedAt = comparingCreatedAt
-			} else if minCreatedAt.After(comparingCreatedAt) {
-				minCreatedAt = comparingCreatedAt
+			if currentMinMax.MaxTransactionId < comparingTransactionId {
+				currentMinMax.MaxTransactionId = comparingTransactionId
+			}
+			if currentMinMax.MinTransactionId == 0 || currentMinMax.MinTransactionId > comparingTransactionId {
+				currentMinMax.MinTransactionId = comparingTransactionId
 			}
 
-			if maxCreatedAt.Before(comparingCreatedAt) {
-				maxCreatedAt = comparingCreatedAt
-			}
+			valuesByServerId[r.ServerId] = currentMinMax
 		}
 	}
 
-	return minMaxValues{
-		minCreatedAt: minCreatedAt,
-		maxCreatedAt: maxCreatedAt,
-		minDumpId:    minDumpId,
-		maxDumpId:    maxDumpId,
+	return MinMaxValues{
+		MinDumpId:        minDumpId,
+		MaxDumpId:        maxDumpId,
+		ValuesByServerId: valuesByServerId,
 	}
 }
 

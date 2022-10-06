@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -18,23 +17,24 @@ const (
 )
 
 type MysqlReplicationRowEvent struct {
-	Table          *schema.Table
-	Rows           [][]interface{}
-	Action         string
-	Timestamp      time.Time
-	ServerId       string
-	GtidEventCount uint32
-	Gtid           int64
+	Table                  *schema.Table
+	Rows                   [][]interface{}
+	Action                 string
+	Timestamp              time.Time
+	ServerId               string
+	TransactionEventNumber uint32
+	TransactionId          uint64
 }
 
-func (e *MysqlReplicationRowEvent) EventId() string {
-	gtid := strconv.FormatInt(e.Gtid, 10)
-	gtidCount := strconv.FormatUint(uint64(e.GtidEventCount), 10)
+// TODO replace this with storing event data in 3 columns
+func EventIdString(serverId string, gtidNum uint64, gtidEventCount uint32) string {
+	gtid := strconv.FormatUint(gtidNum, 10)
+	gtidCount := strconv.FormatUint(uint64(gtidEventCount), 10)
 
 	// optimized to reduce allocations vs sprintf or string concatenation.
 	eid := strings.Builder{}
-	eid.Grow(len(e.ServerId) + len(gtid) + len(gtidCount) + 2)
-	eid.WriteString(e.ServerId)
+	eid.Grow(len(serverId) + len(gtid) + len(gtidCount) + 2)
+	eid.WriteString(serverId)
 	eid.WriteRune(':')
 	eid.WriteString(gtid)
 	eid.WriteRune('#')
@@ -47,9 +47,10 @@ func (e *MysqlReplicationRowEvent) IsDumpEvent() bool {
 	return e.Action == "dump"
 }
 
+// TODO hoist this up into RowInsertData
 func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 	if !e.IsDumpEvent() {
-		return e.ServerId + ":1-" + strconv.FormatInt(e.Gtid, 10)
+		return e.ServerId + ":1-" + strconv.FormatUint(e.TransactionId, 10)
 	} else {
 		return ""
 	}
@@ -71,6 +72,7 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 	if hasPreviousEvent {
 		previousRow = e.Rows[0]
 	}
+
 	row := e.Rows[newEventIdx]
 
 	isDuplicate := false
@@ -110,18 +112,29 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 
 	id := toInt64(insertData.Event["id"])
 	insertData.Id = toInt64(id)
-	var eventId string
+	var serverId, eventId string
+	var transactionId uint64
+	// TODO re-evaluate the use of this - it's only needed now for the local dedupe..
 	if e.Action != "dump" {
-		eventId = e.EventId()
+		serverId = e.ServerId
+		transactionId = e.TransactionId
+		eventId = EventIdString(e.ServerId, e.TransactionId, e.TransactionEventNumber)
 	} else {
-		eventId = fmt.Sprintf("dump:%d#0", id)
+		serverId = "dump"
+		transactionId = uint64(id)
+		eventId = EventIdString("dump", uint64(id), 0)
 	}
 
-	insertData.Event[eventIdColumnName] = eventId
 	insertData.EventId = eventId
 	insertData.EventTable = tableName
 	insertData.EventCreatedAt = timestamp
 	insertData.EventAction = e.Action
+	insertData.ServerId = serverId
+	insertData.TransactionId = transactionId
+	insertData.TransactionEventNumber = e.TransactionEventNumber
+	insertData.Event[eventServerIdColumnName] = serverId
+	insertData.Event[eventTransactionIdColumnName] = transactionId
+	insertData.Event[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
 
 	return insertData, false
 }

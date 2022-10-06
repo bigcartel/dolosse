@@ -121,9 +121,11 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 				price Decimal(10, 2),
 				description Nullable(String),
 				created_at DateTime,
-				changelog_id String,
 				changelog_action LowCardinality(String),
-				changelog_event_created_at DateTime64(9)
+				changelog_event_created_at DateTime64(9),
+				changelog_server_id LowCardinality(String),
+				changelog_transaction_id UInt64,
+				changelog_transaction_event_number UInt32
 			)
 		  ENGINE = MergeTree
 			ORDER BY (id)
@@ -204,7 +206,10 @@ func TestReplicationAndDump(t *testing.T) {
 		State.cancel()
 		*Config.Rewind = true
 
+		State.batchDuplicatesFilter.resetState(&clickhouseConn)
 		go startTestSync(clickhouseConn)
+
+		time.Sleep(100 * time.Millisecond)
 
 		// it doesn't write any new rows
 		getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 4)
