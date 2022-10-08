@@ -409,7 +409,7 @@ func startSync() {
 		if err == context.Canceled {
 			break
 		} else {
-			time.Sleep(1)
+			time.Sleep(1 * time.Second)
 			retryCount++
 		}
 	}
