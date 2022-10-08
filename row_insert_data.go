@@ -22,6 +22,12 @@ type RowInsertData struct {
 	Event                  RowData
 }
 
+type DuplicateBinlogEventKey = struct {
+	ServerId               string `ch:"changelog_server_id"`
+	TransactionId          uint64 `ch:"changelog_transaction_id"`
+	TransactionEventNumber uint32 `ch:"changelog_transaction_event_number"`
+}
+
 func (d *RowInsertData) Reset() {
 	maps.Clear(d.Event)
 }

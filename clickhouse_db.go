@@ -44,72 +44,23 @@ func establishClickhouseConnection() (ClickhouseDb, error) {
 	}, err
 }
 
-func (db *ClickhouseDb) Query(q string, args ...interface{}) [][]interface{} {
-	rows, err := db.conn.Query(State.ctx, q, args...)
-	if err != nil {
-		log.Panicln(err, q, args)
-	}
-
-	rowColumnTypes := rows.ColumnTypes()
-	columnTypes := make([]reflect.Type, len(rowColumnTypes))
-	for i, c := range rowColumnTypes {
-		columnTypes[i] = c.ScanType()
-	}
-
-	scannedRows := make([][]interface{}, 0, 10000)
-
-	makeVarsForRow := func() []interface{} {
-		vars := make([]interface{}, len(columnTypes))
-
-		for i, columnType := range columnTypes {
-			value := reflect.New(columnType).Elem()
-			vars[i] = pointerToValue(value).Interface()
-		}
-
-		return vars
-	}
-
-	for rows.Next() {
-		vars := makeVarsForRow()
-
-		if err := rows.Scan(vars...); err != nil {
-			must(err)
-		}
-
-		for i, v := range vars {
-			if columnTypes[i].Kind() != reflect.Pointer {
-				// dereference non-pointer columns so they're easier to deal with elsewhere
-				vars[i] = reflect.ValueOf(v).Elem().Interface()
-			}
-		}
-
-		scannedRows = append(scannedRows, vars)
-	}
-
-	return scannedRows
-}
-
-type DuplicateBinlogEventKey = struct {
-	ServerId               string
-	TransactionId          uint64
-	TransactionEventNumber uint32
-}
-
 func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, Set[int64]) {
 	queryString := fmt.Sprintf(`
                SELECT
-               id
+               toInt64(id)
                FROM %s where id >= $1 and id <= $2`,
 		tableWithDb)
 
-	ids := db.Query(queryString, minId, maxId)
-	log.Infoln("number of ids returned", len(ids))
+	idResult := unwrap(db.conn.Query(State.ctx, queryString, minId, maxId))
+	idsSet := make(Set[int64], 10000)
 
-	idsSet := make(Set[int64], len(ids))
-
-	for _, row := range ids {
-		idsSet.Add(toInt64(row[0]))
+	for idResult.Next() {
+		var id int64
+		idResult.Scan(&id)
+		idsSet.Add(id)
 	}
+
+	log.Infoln("number of ids returned", len(idsSet))
 
 	return len(idsSet) > 0, idsSet
 }
@@ -145,32 +96,15 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxV
 		tableWithDb,
 		whereClause)
 
-	duplicates := db.Query(queryString)
+	duplicates := unwrap(db.conn.Query(State.ctx, queryString))
 
-	for _, dup := range duplicates {
-		serverId, ok := dup[0].(string)
-		if !ok {
-			log.Fatalf("Failed converting %v to string", serverId)
-		}
-
-		transactionId, ok := dup[1].(uint64)
-		if !ok {
-			log.Fatalf("Failed converting %d to uin64", transactionId)
-		}
-
-		transactionEventNumber, ok := dup[2].(uint32)
-		if !ok {
-			log.Fatalf("Failed converting %d to uin32", transactionEventNumber)
-		}
-
-		duplicatesMap.Add(DuplicateBinlogEventKey{
-			ServerId:               serverId,
-			TransactionId:          transactionId,
-			TransactionEventNumber: transactionEventNumber,
-		})
+	for duplicates.Next() {
+		duplicateKey := DuplicateBinlogEventKey{}
+		must(duplicates.ScanStruct(&duplicateKey))
+		duplicatesMap.Add(duplicateKey)
 	}
 
-	return len(duplicates) > 0, duplicatesMap
+	return len(duplicatesMap) > 0, duplicatesMap
 }
 
 func (db *ClickhouseDb) Setup() {

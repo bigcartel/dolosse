@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/shopspring/decimal"
+	"github.com/siddontang/go-log/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -57,13 +59,59 @@ func startTestSync(ch ClickhouseDb) {
 	startSync()
 }
 
+// TODO replace this with scan structw
+func Query(db *ClickhouseDb, q string, args ...interface{}) [][]interface{} {
+	rows, err := db.conn.Query(State.ctx, q, args...)
+	if err != nil {
+		log.Panicln(err, q, args)
+	}
+
+	rowColumnTypes := rows.ColumnTypes()
+	columnTypes := make([]reflect.Type, len(rowColumnTypes))
+	for i, c := range rowColumnTypes {
+		columnTypes[i] = c.ScanType()
+	}
+
+	scannedRows := make([][]interface{}, 0, 10000)
+
+	makeVarsForRow := func() []interface{} {
+		vars := make([]interface{}, len(columnTypes))
+
+		for i, columnType := range columnTypes {
+			value := reflect.New(columnType).Elem()
+			vars[i] = pointerToValue(value).Interface()
+		}
+
+		return vars
+	}
+
+	for rows.Next() {
+		vars := makeVarsForRow()
+
+		if err := rows.Scan(vars...); err != nil {
+			must(err)
+		}
+
+		for i, v := range vars {
+			if columnTypes[i].Kind() != reflect.Pointer {
+				// dereference non-pointer columns so they're easier to deal with elsewhere
+				vars[i] = reflect.ValueOf(v).Elem().Interface()
+			}
+		}
+
+		scannedRows = append(scannedRows, vars)
+	}
+
+	return scannedRows
+}
+
 func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount int) [][]interface{} {
 	time.Sleep(50 * time.Millisecond)
 
 	waitingForRowAttempts := 0
 	var r [][]interface{}
 	for waitingForRowAttempts < 20 {
-		r = chDb.Query(query)
+		r = Query(&chDb, query)
 		if len(r) < 2 {
 			time.Sleep(50 * time.Millisecond)
 			waitingForRowAttempts++
@@ -244,7 +292,7 @@ func BenchmarkFullRun(b *testing.B) {
 			// Unsure why I have to start with ithis nsert statement, but replication
 			// from GTID event id 1 won't pick up on the first 1 insert after a reset
 			// master for some reason
-			statementCount := 30000
+			statementCount := 1000
 			execMysqlStatements(mysqlConn, generateBenchMysqlStatements(statementCount))
 
 			go func() {
