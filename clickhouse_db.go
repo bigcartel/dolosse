@@ -19,9 +19,9 @@ type ClickhouseDb struct {
 
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const eventActionColumnName = "changelog_action"
-const eventServerIdColumnName = "changelog_server_id"
-const eventTransactionIdColumnName = "changelog_transaction_id"
-const eventTransactionEventNumberColumnName = "changelog_transaction_event_number"
+const eventServerIdColumnName = "changelog_gtid_server_id"
+const eventTransactionIdColumnName = "changelog_gtid_transaction_id"
+const eventTransactionEventNumberColumnName = "changelog_gtid_transaction_event_number"
 const gtidSetKey = "last_synced_gtid_set"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
