@@ -113,28 +113,21 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 	id := toInt64(insertData.Event["id"])
 	insertData.Id = toInt64(id)
 	var serverId, eventId string
-	var transactionId uint64
 	// TODO re-evaluate the use of this - it's only needed now for the local dedupe..
 	if e.Action != "dump" {
 		serverId = e.ServerId
-		transactionId = e.TransactionId
 		eventId = EventIdString(e.ServerId, e.TransactionId, e.TransactionEventNumber)
 	} else {
 		serverId = "dump"
-		transactionId = uint64(id)
 		eventId = EventIdString("dump", uint64(id), 0)
 	}
 
+	insertData.Event[eventIdColumnName] = eventId
+	insertData.ServerId = serverId
 	insertData.EventId = eventId
 	insertData.EventTable = tableName
 	insertData.EventCreatedAt = timestamp
 	insertData.EventAction = e.Action
-	insertData.ServerId = serverId
-	insertData.TransactionId = transactionId
-	insertData.TransactionEventNumber = e.TransactionEventNumber
-	insertData.Event[eventServerIdColumnName] = serverId
-	insertData.Event[eventTransactionIdColumnName] = transactionId
-	insertData.Event[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
 
 	return insertData, false
 }

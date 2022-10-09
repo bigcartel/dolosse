@@ -126,7 +126,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 			continue
 		}
 
-		if hasDuplicates && duplicatesMap.Contains(rowInsertData.DedupeKey()) {
+		if hasDuplicates && duplicatesMap.Contains(rowInsertData.EventId) {
 			if rowInsertData.EventAction != "dump" {
 				Stats.IncrementSkippedPersistedDuplicates()
 			} else {
@@ -195,14 +195,14 @@ type MinMaxValues struct {
 	MinDumpId,
 	MaxDumpId int64
 	ValuesByServerId map[string]struct {
-		MinTransactionId,
-		MaxTransactionId uint64
+		MinId,
+		MaxId string
 	}
 }
 
 type MinMaxValuesMap map[string]struct {
-	MinTransactionId,
-	MaxTransactionId uint64
+	MinId,
+	MaxId string
 }
 
 func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
@@ -211,7 +211,7 @@ func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
 		maxDumpId int64
 
 	for _, r := range *rows {
-		comparingTransactionId := r.TransactionId
+		comparingTransactionId := r.EventId
 		currentMinMax := valuesByServerId[r.ServerId]
 
 		if r.EventAction == "dump" {
@@ -222,11 +222,11 @@ func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
 				maxDumpId = r.Id
 			}
 		} else {
-			if currentMinMax.MaxTransactionId < comparingTransactionId {
-				currentMinMax.MaxTransactionId = comparingTransactionId
+			if currentMinMax.MaxId < comparingTransactionId {
+				currentMinMax.MaxId = comparingTransactionId
 			}
-			if currentMinMax.MinTransactionId == 0 || currentMinMax.MinTransactionId > comparingTransactionId {
-				currentMinMax.MinTransactionId = comparingTransactionId
+			if currentMinMax.MinId == "" || currentMinMax.MinId > comparingTransactionId {
+				currentMinMax.MinId = comparingTransactionId
 			}
 
 			valuesByServerId[r.ServerId] = currentMinMax

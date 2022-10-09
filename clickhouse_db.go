@@ -19,9 +19,7 @@ type ClickhouseDb struct {
 
 const eventCreatedAtColumnName = "changelog_event_created_at"
 const eventActionColumnName = "changelog_action"
-const eventServerIdColumnName = "changelog_gtid_server_id"
-const eventTransactionIdColumnName = "changelog_gtid_transaction_id"
-const eventTransactionEventNumberColumnName = "changelog_gtid_transaction_event_number"
+const eventIdColumnName = "changelog_id"
 const gtidSetKey = "last_synced_gtid_set"
 
 func establishClickhouseConnection() (ClickhouseDb, error) {
@@ -65,20 +63,18 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int6
 	return len(idsSet) > 0, idsSet
 }
 
-func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxValues) (bool, Set[DuplicateBinlogEventKey]) {
+func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxValues) (bool, Set[string]) {
 	whereClauses := make([]string, 0, len(minMaxValues.ValuesByServerId))
-	for serverId, minMax := range minMaxValues.ValuesByServerId {
+	for _, minMax := range minMaxValues.ValuesByServerId {
 		whereClauses = append(whereClauses,
-			fmt.Sprintf("(%s = '%s' and %s >= %d and %s <= %d)",
-				eventServerIdColumnName,
-				serverId,
-				eventTransactionIdColumnName,
-				minMax.MinTransactionId,
-				eventTransactionIdColumnName,
-				minMax.MaxTransactionId))
+			fmt.Sprintf("(%s >= '%s' and %s <= '%s')",
+				eventIdColumnName,
+				minMax.MinId,
+				eventIdColumnName,
+				minMax.MaxId))
 	}
 
-	duplicatesMap := make(Set[DuplicateBinlogEventKey], 2)
+	duplicatesMap := make(Set[string], 2)
 
 	if len(whereClauses) == 0 {
 		return false, duplicatesMap
@@ -88,19 +84,17 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxV
 
 	queryString := fmt.Sprintf(`
 		SELECT
-		%s, %s, %s
+		%s
 		FROM %s where %s`,
-		eventServerIdColumnName,
-		eventTransactionIdColumnName,
-		eventTransactionEventNumberColumnName,
+		eventIdColumnName,
 		tableWithDb,
 		whereClause)
 
 	duplicates := unwrap(db.conn.Query(State.ctx, queryString))
 
 	for duplicates.Next() {
-		duplicateKey := DuplicateBinlogEventKey{}
-		must(duplicates.ScanStruct(&duplicateKey))
+		var duplicateKey string
+		must(duplicates.Scan(&duplicateKey))
 		duplicatesMap.Add(duplicateKey)
 	}
 
@@ -183,9 +177,7 @@ func (db *ClickhouseDb) CheckSchema() {
 		requiredColumns := []RequiredColumn{
 			{eventCreatedAtColumnName, "DateTime64(9)", false},
 			{eventActionColumnName, "LowCardinality(String)", false},
-			{eventServerIdColumnName, "LowCardinality(String)", false},
-			{eventTransactionIdColumnName, "UInt64", false},
-			{eventTransactionEventNumberColumnName, "UInt32", false},
+			{eventIdColumnName, "String", false},
 		}
 
 		for _, column := range columns {

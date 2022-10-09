@@ -145,9 +145,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 				created_at DateTime,
 				changelog_action LowCardinality(String),
 				changelog_event_created_at DateTime64(9),
-				changelog_gtid_server_id LowCardinality(String),
-				changelog_gtid_transaction_id UInt64,
-				changelog_gtid_transaction_event_number UInt32
+				changelog_id String
 			)
 		  ENGINE = MergeTree
 			ORDER BY (id)
