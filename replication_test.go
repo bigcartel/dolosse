@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,63 +58,26 @@ func startTestSync(ch ClickhouseDb) {
 	startSync()
 }
 
-// TODO replace this with scan structw
-func Query(db *ClickhouseDb, q string, args ...interface{}) [][]interface{} {
-	rows, err := db.conn.Query(State.ctx, q, args...)
-	if err != nil {
-		log.Panicln(err, q, args)
-	}
-
-	rowColumnTypes := rows.ColumnTypes()
-	columnTypes := make([]reflect.Type, len(rowColumnTypes))
-	for i, c := range rowColumnTypes {
-		columnTypes[i] = c.ScanType()
-	}
-
-	scannedRows := make([][]interface{}, 0, 10000)
-
-	makeVarsForRow := func() []interface{} {
-		vars := make([]interface{}, len(columnTypes))
-
-		for i, columnType := range columnTypes {
-			value := reflect.New(columnType).Elem()
-			vars[i] = pointerToValue(value).Interface()
-		}
-
-		return vars
-	}
-
-	for rows.Next() {
-		vars := makeVarsForRow()
-
-		if err := rows.Scan(vars...); err != nil {
-			must(err)
-		}
-
-		for i, v := range vars {
-			if columnTypes[i].Kind() != reflect.Pointer {
-				// dereference non-pointer columns so they're easier to deal with elsewhere
-				vars[i] = reflect.ValueOf(v).Elem().Interface()
-			}
-		}
-
-		scannedRows = append(scannedRows, vars)
-	}
-
-	return scannedRows
-}
-
-func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount int) [][]interface{} {
+func getChRows[T any](t *testing.T, chDb ClickhouseDb, query string, expectedRowCount int) []T {
 	time.Sleep(50 * time.Millisecond)
 
 	waitingForRowAttempts := 0
-	var r [][]interface{}
+	var r []T
 	for waitingForRowAttempts < 20 {
-		r = Query(&chDb, query)
-		if len(r) < 2 {
+		result := unwrap(chDb.conn.Query(State.ctx, query))
+
+		ts := make([]T, 0, 1000)
+		for result.Next() {
+			var t T
+			result.ScanStruct(&t)
+			ts = append(ts, t)
+		}
+
+		if len(ts) < 2 {
 			time.Sleep(50 * time.Millisecond)
 			waitingForRowAttempts++
 		} else {
+			r = ts
 			break
 		}
 	}
@@ -129,6 +91,18 @@ func getChRows(t *testing.T, chDb ClickhouseDb, query string, expectedRowCount i
 	}
 
 	return r
+}
+
+type TestRow = struct {
+	Id              int32           `ch:"id"`
+	Name            string          `ch:"name"`
+	Price           decimal.Decimal `ch:"price"`
+	Description     string          `ch:"description"`
+	ChangelogAction string          `ch:"changelog_action"`
+}
+
+func getTestRows(t *testing.T, chDb ClickhouseDb, expectedRowCount int) []TestRow {
+	return getChRows[TestRow](t, chDb, "select id, name, price, description, changelog_action from test.test order by changelog_event_created_at asc", expectedRowCount)
 }
 
 func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
@@ -188,13 +162,14 @@ func TestBasicReplication(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 2)
+		r := getTestRows(t, clickhouseConn, 2)
+		log.Infoln(r)
 
-		assert.Equal(t, int32(1), r[0][0].(int32), "replicated id should match")
-		assert.Equal(t, "test thing", r[0][1].(string), "replicated name should match")
-		assert.Equal(t, unwrap(decimal.NewFromString("12.31")), r[0][2].(decimal.Decimal), "replicated price should match")
-		assert.Equal(t, "my cool description", **r[0][3].(**string), "replicated description should match")
-		assert.Equal(t, unwrap(decimal.NewFromString("12.33")), r[1][2].(decimal.Decimal), "second replicated price should match")
+		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
+		assert.Equal(t, "test thing", r[0].Name, "replicated name should match")
+		assert.Equal(t, unwrap(decimal.NewFromString("12.31")), r[0].Price, "replicated price should match")
+		assert.Equal(t, "my cool description", r[0].Description, "replicated description should match")
+		assert.Equal(t, unwrap(decimal.NewFromString("12.33")), r[1].Price, "second replicated price should match")
 
 		State.cancel()
 		time.Sleep(100 * time.Millisecond)
@@ -240,16 +215,16 @@ func TestReplicationAndDump(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getChRows(t, clickhouseConn, "select id, changelog_action from test.test order by id asc", 4)
+		r := getChRows[TestRow](t, clickhouseConn, "select id, changelog_action from test.test order by id asc", 4)
 
-		assert.Equal(t, int32(1), r[0][0].(int32), "replicated id should match")
-		assert.Equal(t, "dump", r[0][1].(string))
-		assert.Equal(t, int32(2), r[1][0].(int32), "replicated id should match")
-		assert.Equal(t, "dump", r[1][1].(string))
-		assert.Equal(t, int32(3), r[2][0].(int32), "replicated id should match")
-		assert.Equal(t, "insert", r[2][1].(string))
-		assert.Equal(t, int32(4), r[3][0].(int32), "replicated id should match")
-		assert.Equal(t, "insert", r[3][1].(string))
+		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
+		assert.Equal(t, "dump", r[0].ChangelogAction)
+		assert.Equal(t, int32(2), r[1].Id, "replicated id should match")
+		assert.Equal(t, "dump", r[1].ChangelogAction)
+		assert.Equal(t, int32(3), r[2].Id, "replicated id should match")
+		assert.Equal(t, "insert", r[2].ChangelogAction)
+		assert.Equal(t, int32(4), r[3].Id, "replicated id should match")
+		assert.Equal(t, "insert", r[3].ChangelogAction)
 
 		State.cancel()
 		*Config.Rewind = true
@@ -260,7 +235,7 @@ func TestReplicationAndDump(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// it doesn't write any new rows
-		getChRows(t, clickhouseConn, "select * from test.test order by changelog_event_created_at asc", 4)
+		getTestRows(t, clickhouseConn, 4)
 
 		State.cancel()
 		time.Sleep(100 * time.Millisecond)
