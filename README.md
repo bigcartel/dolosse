@@ -10,8 +10,8 @@ so that the deduplication queries run quickly
 ALTER TABLE mysql_bigcartel_binlog.products
     ADD PROJECTION prj_changelog_event_gtid
     (
-        SELECT changelog_server_id, changelog_transaction_id, changelog_transaction_event_number
-        ORDER BY (changelog_server_id, changelog_transaction_id, changelog_transaction_event_number)
+        SELECT changelog_gtid_server_id, changelog_gtid_transaction_id, changelog_gtid_transaction_event_number
+        ORDER BY (changelog_gtid_server_id, changelog_gtid_transaction_id, changelog_gtid_transaction_event_number)
     );
 
 ALTER TABLE mysql_bigcartel_binlog.products
