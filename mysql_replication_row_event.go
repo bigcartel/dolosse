@@ -108,7 +108,7 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 		return insertData, true
 	}
 
-	insertData.Event[actionColumnName] = e.Action
+	insertData.Event[eventActionColumnName] = e.Action
 
 	id := toInt64(insertData.Event["id"])
 	insertData.Id = toInt64(id)

@@ -18,7 +18,7 @@ type ClickhouseDb struct {
 }
 
 const eventCreatedAtColumnName = "changelog_event_created_at"
-const actionColumnName = "changelog_action"
+const eventActionColumnName = "changelog_action"
 const eventServerIdColumnName = "changelog_server_id"
 const eventTransactionIdColumnName = "changelog_transaction_id"
 const eventTransactionEventNumberColumnName = "changelog_transaction_event_number"
@@ -164,6 +164,12 @@ func (db *ClickhouseDb) getColumnMap() ChColumnMap {
 	return columns
 }
 
+type RequiredColumn = struct {
+	Name    string
+	Type    string
+	IsValid bool
+}
+
 func (db *ClickhouseDb) CheckSchema() {
 	clickhouseColumnsByTable := db.ColumnsForMysqlTables()
 
@@ -174,44 +180,35 @@ func (db *ClickhouseDb) CheckSchema() {
 			continue
 		}
 
-		requiredCreatedAtType := "DateTime64(9)"
-		requiredActionType := "LowCardinality(String)"
-		// requiredServerIdType := "LowCardinality(String)"
-		// requiredEventIdType := "UInt64"
-		// requiredEventIdType := "UInt32"
-		// requiredIdType := "String"
-		validEventCreatedAt := false
-		validAction := false
+		requiredColumns := []RequiredColumn{
+			{eventCreatedAtColumnName, "DateTime64(9)", false},
+			{eventActionColumnName, "LowCardinality(String)", false},
+			{eventServerIdColumnName, "LowCardinality(String)", false},
+			{eventTransactionIdColumnName, "UInt64", false},
+			{eventTransactionEventNumberColumnName, "UInt32", false},
+		}
 
 		for _, column := range columns {
-			switch column.Name {
-			case eventCreatedAtColumnName:
-				validEventCreatedAt = column.Type == requiredCreatedAtType
-			case actionColumnName:
-				validAction = column.Type == requiredActionType
-				// case eventIdColumnName:
-				// 	validId = column.Type == requiredIdType
+			for i, requiredColumn := range requiredColumns {
+				if column.Name == requiredColumn.Name && column.Type == requiredColumn.Type {
+					requiredColumn.IsValid = true
+					requiredColumns[i] = requiredColumn
+				}
 			}
 		}
 
-		if !validEventCreatedAt || !validAction {
+		columnStrings := make([]string, 0, len(requiredColumns))
+
+		for _, c := range requiredColumns {
+			if !c.IsValid {
+				columnStrings = append(columnStrings,
+					fmt.Sprintf("%s %s", c.Name, c.Type))
+			}
+		}
+
+		if len(columnStrings) > 0 {
 			baseError := fmt.Sprintf("Clickhouse destination table %s requires columns",
 				table)
-
-			columnStrings := make([]string, 0)
-
-			if !validEventCreatedAt {
-				columnStrings = append(columnStrings,
-					fmt.Sprintf("%s %s", eventCreatedAtColumnName, requiredCreatedAtType))
-			}
-			if !validAction {
-				columnStrings = append(columnStrings,
-					fmt.Sprintf("%s %s", actionColumnName, requiredActionType))
-			}
-			// if !validId {
-			// 	columnStrings = append(columnStrings,
-			// 		fmt.Sprintf("%s %s", eventIdColumnName, requiredIdType))
-			// }
 
 			invalidTableMessages = append(invalidTableMessages, fmt.Sprintf("%s %s", baseError, strings.Join(columnStrings, ", ")))
 		}
