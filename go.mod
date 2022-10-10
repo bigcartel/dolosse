@@ -1,6 +1,6 @@
-module bigcartel/mysql-binlog-clickhouse-sink
+module bigcartel/dolosse
 
-go 1.18
+go 1.19
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.3.0
