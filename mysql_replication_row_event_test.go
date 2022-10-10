@@ -25,26 +25,26 @@ func TestEventToClickhouseRowData(t *testing.T) {
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
-	insertData, isDuplicate := rowEvent.ToClickhouseRowData(columns)
+	isDuplicate := rowEvent.ParseInsertData(columns)
 
 	if isDuplicate {
 		t.Error("Expected row not to be flagged as duplicate")
 	}
 
-	if insertData.Id != 12 {
-		t.Errorf("Expected id to be 12, got %d", insertData.Id)
+	if rowEvent.RecordId != 12 {
+		t.Errorf("Expected id to be 12, got %d", rowEvent.RecordId)
 	}
 
-	if insertData.Event["id"] != 12 {
-		t.Errorf("Expected Event['id'] to be 12, got %d", insertData.Id)
+	if rowEvent.InsertData["id"] != 12 {
+		t.Errorf("Expected Event['id'] to be 12, got %d", rowEvent.RecordId)
 	}
 
-	if insertData.Event["name"] != "asdf" {
-		t.Errorf("Expected Event['name'] to be asdf, got %s", insertData.Event["name"])
+	if rowEvent.InsertData["name"] != "asdf" {
+		t.Errorf("Expected Event['name'] to be asdf, got %s", rowEvent.InsertData["name"])
 	}
 
-	if insertData.Event["description"] != "pretty cool" {
-		t.Errorf("Expected Event['description'] to be 'pretty cool', got %s", insertData.Event["description"])
+	if rowEvent.InsertData["description"] != "pretty cool" {
+		t.Errorf("Expected Event['description'] to be 'pretty cool', got %s", rowEvent.InsertData["description"])
 	}
 }
 
@@ -255,18 +255,18 @@ shipping:
 	rows = append(rows, []interface{}{12, yaml})
 	replicationRowEvent.Rows = rows
 
-	insertData, isDuplicate := replicationRowEvent.ToClickhouseRowData(columns)
+	isDuplicate := replicationRowEvent.ParseInsertData(columns)
 
 	if isDuplicate {
 		t.Error("Expected row not to be flagged as duplicate")
 	}
 
-	if insertData.Id != 12 {
-		t.Errorf("Expected id to be 12, got %d", insertData.Id)
+	if replicationRowEvent.RecordId != 12 {
+		t.Errorf("Expected id to be 12, got %d", replicationRowEvent.RecordId)
 	}
 
-	if strings.Contains(string(insertData.Event["yaml_column"].([]byte)), "2 Rose Cottages") {
-		t.Errorf("Expected Event['yaml'] to anonymize address, got %s", insertData.Event["yaml_column"])
+	if strings.Contains(string(replicationRowEvent.InsertData["yaml_column"].([]byte)), "2 Rose Cottages") {
+		t.Errorf("Expected Event['yaml'] to anonymize address, got %s", replicationRowEvent.InsertData["yaml_column"])
 	}
 }
 
@@ -276,6 +276,6 @@ func BenchmarkEventToClickhouseRowData(b *testing.B) {
 	rowEvent := makeRowEvent()
 
 	for n := 0; n < b.N; n++ {
-		rowEvent.ToClickhouseRowData(columns)
+		rowEvent.ParseInsertData(columns)
 	}
 }

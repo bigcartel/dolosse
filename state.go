@@ -15,7 +15,7 @@ type GlobalState struct {
 	ctx                   context.Context
 	cancel                context.CancelFunc
 	processRows           chan *MysqlReplicationRowEvent
-	batchWrite            chan *RowInsertData
+	batchWrite            chan *MysqlReplicationRowEvent
 	latestProcessingGtid  chan string
 	initiatedDump         atomic.Bool
 	mysqlPoolInitialized  atomic.Bool
@@ -38,7 +38,7 @@ func NewGlobalState() *GlobalState {
 		m: NewConcurrentMap[ChColumnSet](),
 	}
 	s.processRows = make(chan *MysqlReplicationRowEvent, *Config.BatchSize*2)
-	s.batchWrite = make(chan *RowInsertData, *Config.BatchSize*2)
+	s.batchWrite = make(chan *MysqlReplicationRowEvent, *Config.BatchSize*2)
 	s.latestProcessingGtid = make(chan string)
 	s.dumpingTables = NewConcurrentMap[struct{}]()
 	s.mysqlColumns = NewConcurrentMap[*schema.Table]()

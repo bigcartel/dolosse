@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -138,9 +139,10 @@ func processDumpData(dbName string, tableName string, values []interface{}) {
 	tableInfo := getMysqlTable(dbName, tableName)
 
 	event := MysqlReplicationRowEvent{
-		Table:  tableInfo,
-		Rows:   [][]interface{}{values},
-		Action: "dump",
+		Table:     tableInfo,
+		Rows:      [][]interface{}{values},
+		Timestamp: time.Now(),
+		Action:    "dump",
 	}
 
 	OnRow(&event)

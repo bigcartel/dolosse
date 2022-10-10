@@ -27,7 +27,7 @@ type ClickhouseBatchRow struct {
 	Table         string
 }
 
-func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *RowInsertData) {
+func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *MysqlReplicationRowEvent) {
 	for {
 		select {
 		case <-State.ctx.Done():
@@ -40,12 +40,12 @@ func processEventWorker(input <-chan *MysqlReplicationRowEvent, output chan<- *R
 				continue
 			}
 
-			insertData, isDup := event.ToClickhouseRowData(columns)
+			isDup := event.ParseInsertData(columns)
 
 			if isDup {
 				Stats.IncrementSkippedRowLevelDuplicates()
 			} else {
-				output <- insertData
+				output <- event
 			}
 
 			Stats.IncrementProcessed()
@@ -72,7 +72,7 @@ func logNoRows(table string) {
 	log.Infoln("no rows to send for", table, "skipping...")
 }
 
-func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowInsertData) {
+func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*MysqlReplicationRowEvent) {
 	columns, hasColumns := State.chColumns.ColumnsForTable(table)
 
 	if !hasColumns {
@@ -103,7 +103,7 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*RowI
 	log.Infoln("batch sent for", tableWithDb)
 }
 
-func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]*RowInsertData, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]*MysqlReplicationRowEvent, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 	minMaxValues := getMinMaxValues(processedRows)
 
 	hasStoredIds := false
@@ -120,14 +120,14 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	batchColumnArrays := make(ClickhouseBatchColumns, len(chColumns))
 	writeCount := 0
 
-	for _, rowInsertData := range *processedRows {
-		if rowInsertData.EventAction == "dump" && hasStoredIds && storedIdsMap.Contains(rowInsertData.Id) {
+	for _, event := range *processedRows {
+		if event.Action == "dump" && hasStoredIds && storedIdsMap.Contains(event.RecordId) {
 			Stats.IncrementSkippedDumpDuplicates()
 			continue
 		}
 
-		if hasDuplicates && duplicatesMap.Contains(rowInsertData.DedupeKey()) {
-			if rowInsertData.EventAction != "dump" {
+		if hasDuplicates && duplicatesMap.Contains(event.DedupeKey()) {
+			if event.Action != "dump" {
 				Stats.IncrementSkippedPersistedDuplicates()
 			} else {
 				Stats.IncrementSkippedDumpDuplicates()
@@ -136,20 +136,20 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 			continue
 		}
 
-		if rowInsertData.EventCreatedAt.Year() == 1 {
-			log.Panicln(rowInsertData)
+		if event.Timestamp.Year() == 1 {
+			log.Panicln(event)
 		}
 
 		writeCount++
 
 		for i, col := range chColumns {
-			val := rowInsertData.Event[col.Name]
+			val := event.InsertData[col.Name]
 			newColumnAry, err := reflectAppend(col.Type, batchColumnArrays[i], val, len(*processedRows))
 
 			if err != nil {
 				log.Infoln(err)
 				log.Infoln("Column:", col.Name)
-				log.Fatalf("Insert Data: %+v\n", rowInsertData)
+				log.Fatalf("Event struct: %+v\n", event)
 			}
 
 			batchColumnArrays[i] = newColumnAry
@@ -205,7 +205,7 @@ type MinMaxValuesMap map[string]struct {
 	MaxTransactionId uint64
 }
 
-func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
+func getMinMaxValues(rows *[]*MysqlReplicationRowEvent) MinMaxValues {
 	valuesByServerId := make(MinMaxValuesMap, 1)
 	var minDumpId,
 		maxDumpId int64
@@ -214,12 +214,12 @@ func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
 		comparingTransactionId := r.TransactionId
 		currentMinMax := valuesByServerId[r.ServerId]
 
-		if r.EventAction == "dump" {
-			if minDumpId == 0 || minDumpId > r.Id {
-				minDumpId = r.Id
+		if r.Action == "dump" {
+			if minDumpId == 0 || minDumpId > r.RecordId {
+				minDumpId = r.RecordId
 			}
-			if maxDumpId < r.Id {
-				maxDumpId = r.Id
+			if maxDumpId < r.RecordId {
+				maxDumpId = r.RecordId
 			}
 		} else {
 			if currentMinMax.MaxTransactionId < comparingTransactionId {
@@ -240,15 +240,11 @@ func getMinMaxValues(rows *[]*RowInsertData) MinMaxValues {
 	}
 }
 
-type EventsByTable map[string]*[]*RowInsertData
+type EventsByTable map[string]*[]*MysqlReplicationRowEvent
 
 func (es *EventsByTable) Reset(recycleSlices bool) {
-	for k, vSlice := range *es {
-		for _, v := range *vSlice {
-			v.Reset()
-			RowInsertDataPool.Put(v)
-		}
-		if recycleSlices {
+	if recycleSlices {
+		for k, vSlice := range *es {
 			newSlice := (*vSlice)[:0]
 			(*es)[k] = &newSlice
 		}
@@ -319,24 +315,24 @@ func batchWrite() {
 				resetBatch()
 			}
 		case e := <-State.batchWrite:
-			if e.EventAction != "dump" && State.batchDuplicatesFilter.TestAndAdd(e.EventId) {
+			if e.Action != "dump" && State.batchDuplicatesFilter.TestAndAdd(e.EventId) {
 				Stats.IncrementSkippedLocallyFilteredDuplicates()
 				continue
 			}
 
-			if firstGtidInBatch == "" && !e.RawEvent.IsDumpEvent() {
-				firstGtidInBatch = e.RawEvent.GtidRangeString()
+			if firstGtidInBatch == "" && !e.IsDumpEvent() {
+				firstGtidInBatch = e.GtidRangeString()
 			}
 
-			if eventsByTable[e.EventTable] == nil {
+			if eventsByTable[e.Table.Name] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
-				eventSlice := make([]*RowInsertData, 0, *Config.BatchSize/20)
-				eventsByTable[e.EventTable] = &eventSlice
+				eventSlice := make([]*MysqlReplicationRowEvent, 0, *Config.BatchSize/20)
+				eventsByTable[e.Table.Name] = &eventSlice
 			}
 
-			events := append(*eventsByTable[e.EventTable], e)
-			eventsByTable[e.EventTable] = &events
+			events := append(*eventsByTable[e.Table.Name], e)
+			eventsByTable[e.Table.Name] = &events
 
 			if eventsInBatchCount == *Config.BatchSize {
 				deliver()
@@ -361,7 +357,7 @@ func deliverBatch(clickhouseDb ClickhouseDb, eventsByTable EventsByTable, lastGt
 
 		wg.Add(1)
 
-		go func(table string, rows *[]*RowInsertData) {
+		go func(table string, rows *[]*MysqlReplicationRowEvent) {
 			working <- true
 			deliverBatchForTable(clickhouseDb, table, rows)
 			<-working

@@ -16,6 +16,8 @@ const (
 	DeleteAction = "delete"
 )
 
+type RowData map[string]interface{}
+
 type MysqlReplicationRowEvent struct {
 	Table                  *schema.Table
 	Rows                   [][]interface{}
@@ -24,6 +26,9 @@ type MysqlReplicationRowEvent struct {
 	ServerId               string
 	TransactionEventNumber uint32
 	TransactionId          uint64
+	RecordId               int64
+	EventId                string
+	InsertData             RowData
 }
 
 // TODO replace this with storing event data in 3 columns
@@ -47,6 +52,20 @@ func (e *MysqlReplicationRowEvent) IsDumpEvent() bool {
 	return e.Action == "dump"
 }
 
+type DuplicateBinlogEventKey = struct {
+	ServerId               string `ch:"changelog_gtid_server_id"`
+	TransactionId          uint64 `ch:"changelog_gtid_transaction_id"`
+	TransactionEventNumber uint32 `ch:"changelog_gtid_transaction_event_number"`
+}
+
+func (e *MysqlReplicationRowEvent) DedupeKey() DuplicateBinlogEventKey {
+	return DuplicateBinlogEventKey{
+		ServerId:               e.ServerId,
+		TransactionId:          e.TransactionId,
+		TransactionEventNumber: e.TransactionEventNumber,
+	}
+}
+
 // TODO hoist this up into RowInsertData
 func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 	if !e.IsDumpEvent() {
@@ -58,9 +77,8 @@ func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
-func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (ClickhouseRowData *RowInsertData, IsDuplicate bool) {
-	insertData := RowInsertDataPool.Get().(*RowInsertData)
-	insertData.RawEvent = e
+func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDuplicate bool) {
+	Event := make(RowData, len(columns.columns))
 
 	var previousRow []interface{}
 	tableName := e.Table.Name
@@ -90,27 +108,15 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 			}
 
 			convertedValue := parseValue(row[i], c.Type, tableName, columnName)
-			insertData.Event[c.Name] = convertedValue
+			Event[c.Name] = convertedValue
 		}
 	}
 
-	var timestamp time.Time
-	if !e.Timestamp.IsZero() {
-		timestamp = e.Timestamp
-	} else {
-		timestamp = time.Now()
-	}
-
-	insertData.Event[eventCreatedAtColumnName] = timestamp
-
 	if isDuplicate {
-		return insertData, true
+		return true
 	}
 
-	insertData.Event[eventActionColumnName] = e.Action
-
-	id := toInt64(insertData.Event["id"])
-	insertData.Id = toInt64(id)
+	id := toInt64(Event["id"])
 	var serverId, eventId string
 	var transactionId uint64
 	// TODO re-evaluate the use of this - it's only needed now for the local dedupe..
@@ -124,16 +130,15 @@ func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (Cl
 		eventId = EventIdString("dump", uint64(id), 0)
 	}
 
-	insertData.EventId = eventId
-	insertData.EventTable = tableName
-	insertData.EventCreatedAt = timestamp
-	insertData.EventAction = e.Action
-	insertData.ServerId = serverId
-	insertData.TransactionId = transactionId
-	insertData.TransactionEventNumber = e.TransactionEventNumber
-	insertData.Event[eventServerIdColumnName] = serverId
-	insertData.Event[eventTransactionIdColumnName] = transactionId
-	insertData.Event[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
+	Event[eventCreatedAtColumnName] = e.Timestamp
+	Event[eventActionColumnName] = e.Action
+	Event[eventServerIdColumnName] = serverId
+	Event[eventTransactionIdColumnName] = transactionId
+	Event[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
 
-	return insertData, false
+	e.RecordId = id
+	e.EventId = eventId
+	e.InsertData = Event
+
+	return false
 }
