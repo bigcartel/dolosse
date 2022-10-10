@@ -245,6 +245,7 @@ type EventsByTable map[string]*[]*RowInsertData
 func (es *EventsByTable) Reset(recycleSlices bool) {
 	for k, vSlice := range *es {
 		for _, v := range *vSlice {
+			v.Reset()
 			RowInsertDataPool.Put(v)
 		}
 		if recycleSlices {

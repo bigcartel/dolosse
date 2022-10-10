@@ -60,7 +60,6 @@ func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 // dedupe for yaml columns according to filtered values?
 func (e *MysqlReplicationRowEvent) ToClickhouseRowData(columns *ChColumnSet) (ClickhouseRowData *RowInsertData, IsDuplicate bool) {
 	insertData := RowInsertDataPool.Get().(*RowInsertData)
-	insertData.Reset()
 	insertData.RawEvent = e
 
 	var previousRow []interface{}
