@@ -19,16 +19,16 @@ const (
 type RowData map[string]interface{}
 
 type MysqlReplicationRowEvent struct {
-	Table                  *schema.Table
-	Rows                   [][]interface{}
-	Action                 string
-	Timestamp              time.Time
-	ServerId               string
 	TransactionEventNumber uint32
 	TransactionId          uint64
 	RecordId               int64
+	Action                 string
+	ServerId               string
 	EventId                string
+	Table                  *schema.Table
 	InsertData             RowData
+	Timestamp              time.Time
+	Rows                   [][]interface{}
 }
 
 // TODO replace this with storing event data in 3 columns
