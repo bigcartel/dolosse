@@ -85,9 +85,7 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*Mysq
 		return
 	}
 
-	tableWithDb := tableWithDb(table)
-
-	batchColumnArrays, writeCount := buildClickhouseBatchRows(clickhouseDb, tableWithDb, rows, columns.columns)
+	batchColumnArrays, writeCount := buildClickhouseBatchRows(clickhouseDb, table, rows, columns.columns)
 
 	if writeCount == 0 {
 		logNoRows(table)
@@ -96,23 +94,25 @@ func deliverBatchForTable(clickhouseDb ClickhouseDb, table string, rows *[]*Mysq
 
 	log.Infof("sending batch of %d records for %s", writeCount, table)
 
-	sendClickhouseBatch(clickhouseDb, tableWithDb, batchColumnArrays, columns.columns)
+	sendClickhouseBatch(clickhouseDb, table, batchColumnArrays, columns.columns)
 
 	Stats.AddDelivered(uint64(writeCount))
 
-	log.Infoln("batch sent for", tableWithDb)
+	log.Infof("batch sent for %s.%s", *Config.MysqlDb, table)
 }
 
-func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, processedRows *[]*MysqlReplicationRowEvent, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, table string, processedRows *[]*MysqlReplicationRowEvent, chColumns []ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 	minMaxValues := getMinMaxValues(processedRows)
 
-	hasStoredIds := false
-	var storedIdsMap Set[int64]
+	tableWithDb := tableWithDb(table)
 
-	if minMaxValues.MinDumpId > 0 {
-		hasStoredIds, storedIdsMap = clickhouseDb.QueryIdRange(tableWithDb,
-			minMaxValues.MinDumpId,
-			minMaxValues.MaxDumpId)
+	hasStoredIds := false
+	var storedPksMap Set[string]
+
+	if minMaxValues.MinDumpPks != nil {
+		hasStoredIds, storedPksMap = clickhouseDb.QueryIdRange(tableWithDb,
+			minMaxValues.MinDumpPks,
+			minMaxValues.MaxDumpPks)
 	}
 
 	hasDuplicates, duplicatesMap := clickhouseDb.QueryDuplicates(tableWithDb, minMaxValues)
@@ -121,7 +121,7 @@ func buildClickhouseBatchRows(clickhouseDb ClickhouseDb, tableWithDb string, pro
 	writeCount := 0
 
 	for _, event := range *processedRows {
-		if event.Action == "dump" && hasStoredIds && storedIdsMap.Contains(event.RecordId) {
+		if event.Action == "dump" && hasStoredIds && storedPksMap.Contains(event.PkString()) {
 			Stats.IncrementSkippedDumpDuplicates()
 			continue
 		}
@@ -174,7 +174,9 @@ func commaSeparatedColumnNames(columns []ClickhouseQueryColumn) string {
 	return columnNames
 }
 
-func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchColumnArrays ClickhouseBatchColumns, chColumns []ClickhouseQueryColumn) {
+func sendClickhouseBatch(clickhouseDb ClickhouseDb, table string, batchColumnArrays ClickhouseBatchColumns, chColumns []ClickhouseQueryColumn) {
+	tableWithDb := tableWithDb(table)
+
 	batch := unwrap(clickhouseDb.conn.PrepareBatch(context.Background(),
 		fmt.Sprintf("INSERT INTO %s (%s)", tableWithDb, commaSeparatedColumnNames(chColumns))))
 
@@ -192,8 +194,8 @@ func sendClickhouseBatch(clickhouseDb ClickhouseDb, tableWithDb string, batchCol
 }
 
 type MinMaxValues struct {
-	MinDumpId,
-	MaxDumpId int64
+	MinDumpPks,
+	MaxDumpPks Pks
 	ValuesByServerId map[string]struct {
 		MinTransactionId,
 		MaxTransactionId uint64
@@ -207,19 +209,24 @@ type MinMaxValuesMap map[string]struct {
 
 func getMinMaxValues(rows *[]*MysqlReplicationRowEvent) MinMaxValues {
 	valuesByServerId := make(MinMaxValuesMap, 1)
-	var minDumpId,
-		maxDumpId int64
+	var minDumpPks,
+		maxDumpPks Pks
 
 	for _, r := range *rows {
 		comparingTransactionId := r.TransactionId
 		currentMinMax := valuesByServerId[r.ServerId]
 
-		if r.Action == "dump" {
-			if minDumpId == 0 || minDumpId > r.RecordId {
-				minDumpId = r.RecordId
+		if r.Action == "dump" && len(r.Pks) > 0 {
+			if minDumpPks == nil {
+				minDumpPks = r.Pks
+				maxDumpPks = r.Pks
 			}
-			if maxDumpId < r.RecordId {
-				maxDumpId = r.RecordId
+
+			if minDumpPks.Compare(r.Pks) == 1 {
+				minDumpPks = r.Pks
+			}
+			if maxDumpPks.Compare(r.Pks) <= 0 {
+				maxDumpPks = r.Pks
 			}
 		} else {
 			if currentMinMax.MaxTransactionId < comparingTransactionId {
@@ -234,8 +241,8 @@ func getMinMaxValues(rows *[]*MysqlReplicationRowEvent) MinMaxValues {
 	}
 
 	return MinMaxValues{
-		MinDumpId:        minDumpId,
-		MaxDumpId:        maxDumpId,
+		MinDumpPks:       minDumpPks,
+		MaxDumpPks:       maxDumpPks,
 		ValuesByServerId: valuesByServerId,
 	}
 }

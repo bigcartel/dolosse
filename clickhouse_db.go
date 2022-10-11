@@ -44,25 +44,60 @@ func establishClickhouseConnection() (ClickhouseDb, error) {
 	}, err
 }
 
-func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minId int64, maxId int64) (bool, Set[int64]) {
-	queryString := fmt.Sprintf(`
-               SELECT
-               toInt64(id)
-               FROM %s where id >= $1 and id <= $2`,
-		tableWithDb)
+func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks Pks, maxPks Pks) (bool, Set[string]) {
+	var pkq string
+	whereClauses := make([]string, 0, len(minPks))
 
-	idResult := unwrap(db.conn.Query(State.ctx, queryString, minId, maxId))
-	idsSet := make(Set[int64], 10000)
+	for i, minPk := range minPks {
+		maxPk := maxPks[i]
+		var minVal, maxVal string
+		switch m := minPk.Value.(type) {
+		case string:
+			minVal = "'" + m + "'"
+			maxVal = "'" + maxPk.Value.(string) + "'"
+		default:
+			minVal = fmt.Sprintf("%v", minPk.Value)
+			maxVal = fmt.Sprintf("%v", maxPk.Value)
+		}
 
-	for idResult.Next() {
-		var id int64
-		idResult.Scan(&id)
-		idsSet.Add(id)
+		whereClauses = append(whereClauses,
+			fmt.Sprintf("(%s >= %s AND %s <= %s)",
+				minPk.ColumnName,
+				minVal,
+				minPk.ColumnName,
+				maxVal))
 	}
 
-	log.Infoln("number of ids returned", len(idsSet))
+	for i, pk := range minPks {
+		pkq += "toString(" + pk.ColumnName + ")"
+		if i < len(minPks)-1 {
+			pkq += "||'-'||"
+		} else {
+			pkq += " AS pk"
+		}
+	}
 
-	return len(idsSet) > 0, idsSet
+	whereClause := strings.Join(whereClauses, " AND ")
+	queryString := fmt.Sprintf(`
+               SELECT
+               %s
+               FROM %s where %s`,
+		pkq,
+		tableWithDb,
+		whereClause)
+
+	pksSet := make(Set[string], 10000)
+
+	rows := unwrap(db.conn.Query(State.ctx, queryString))
+	for rows.Next() {
+		var s string
+		rows.Scan(&s)
+		pksSet.Add(s)
+	}
+
+	log.Infoln("number of pks returned", len(pksSet))
+
+	return len(pksSet) > 0, pksSet
 }
 
 func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxValues) (bool, Set[DuplicateBinlogEventKey]) {
@@ -89,7 +124,7 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxV
 	queryString := fmt.Sprintf(`
 		SELECT
 		%s, %s, %s
-		FROM %s where %s`,
+		FROM %s WHERE %s`,
 		eventServerIdColumnName,
 		eventTransactionIdColumnName,
 		eventTransactionEventNumberColumnName,

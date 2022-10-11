@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -14,19 +15,20 @@ const (
 	UpdateAction = "update"
 	InsertAction = "insert"
 	DeleteAction = "delete"
+	DumpAction   = "dump"
 )
 
-type RowData map[string]interface{}
+type RowInsertData map[string]interface{}
 
 type MysqlReplicationRowEvent struct {
 	TransactionEventNumber uint32
 	TransactionId          uint64
-	RecordId               int64
 	Action                 string
 	ServerId               string
 	EventId                string
 	Table                  *schema.Table
-	InsertData             RowData
+	InsertData             RowInsertData
+	Pks                    []Pk
 	Timestamp              time.Time
 	Rows                   [][]interface{}
 }
@@ -49,13 +51,13 @@ func EventIdString(serverId string, gtidNum uint64, gtidEventCount uint32) strin
 }
 
 func (e *MysqlReplicationRowEvent) IsDumpEvent() bool {
-	return e.Action == "dump"
+	return e.Action == DumpAction
 }
 
 type DuplicateBinlogEventKey = struct {
-	ServerId               string `ch:"changelog_gtid_server_id"`
-	TransactionId          uint64 `ch:"changelog_gtid_transaction_id"`
 	TransactionEventNumber uint32 `ch:"changelog_gtid_transaction_event_number"`
+	TransactionId          uint64 `ch:"changelog_gtid_transaction_id"`
+	ServerId               string `ch:"changelog_gtid_server_id"`
 }
 
 func (e *MysqlReplicationRowEvent) DedupeKey() DuplicateBinlogEventKey {
@@ -66,7 +68,6 @@ func (e *MysqlReplicationRowEvent) DedupeKey() DuplicateBinlogEventKey {
 	}
 }
 
-// TODO hoist this up into RowInsertData
 func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 	if !e.IsDumpEvent() {
 		return e.ServerId + ":1-" + strconv.FormatUint(e.TransactionId, 10)
@@ -75,10 +76,8 @@ func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 	}
 }
 
-// TODO test with all types we care about - yaml conversion, etc.
-// dedupe for yaml columns according to filtered values?
-func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDuplicate bool) {
-	Event := make(RowData, len(columns.columns))
+func (e *MysqlReplicationRowEvent) InsertDataFromRows(columns *ChColumnSet) (data RowInsertData, isDuplicate bool) {
+	data = make(RowInsertData, len(columns.columns))
 
 	var previousRow []interface{}
 	tableName := e.Table.Name
@@ -92,7 +91,7 @@ func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDupl
 
 	row := e.Rows[newEventIdx]
 
-	isDuplicate := false
+	isDuplicate = false
 	if e.Action == "update" {
 		isDuplicate = true
 	}
@@ -108,17 +107,60 @@ func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDupl
 			}
 
 			convertedValue := parseValue(row[i], c.Type, tableName, columnName)
-			Event[c.Name] = convertedValue
+			data[c.Name] = convertedValue
 		}
 	}
+
+	return data, isDuplicate
+}
+
+func (e *MysqlReplicationRowEvent) PkString() string {
+	pksb := strings.Builder{}
+	pksb.Grow(len(e.Pks) * 8)
+
+	for i, pk := range e.Pks {
+		pksb.WriteString(fmt.Sprintf("%v", pk.Value))
+
+		if i < len(e.Pks)-1 {
+			pksb.WriteRune('-')
+		}
+	}
+
+	return pksb.String()
+}
+
+func (e *MysqlReplicationRowEvent) buildPk(insertData RowInsertData) (PKValues Pks) {
+	PKValues = make(Pks, 0, len(e.Table.PKColumns))
+
+	for _, idx := range e.Table.PKColumns {
+		column := e.Table.Columns[idx]
+		value := insertData[column.Name]
+
+		if value != nil {
+			PKValues = append(PKValues, Pk{
+				ColumnName: column.Name,
+				Value:      value,
+			})
+		}
+	}
+
+	return PKValues
+}
+
+// TODO test with all types we care about - yaml conversion, etc.
+// dedupe for yaml columns according to filtered values?
+func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDuplicate bool) {
+	insertData, isDuplicate := e.InsertDataFromRows(columns)
 
 	if isDuplicate {
 		return true
 	}
 
-	id := toInt64(Event["id"])
+	e.Pks = e.buildPk(insertData)
+
 	var serverId, eventId string
 	var transactionId uint64
+
 	// TODO re-evaluate the use of this - it's only needed now for the local dedupe..
 	if e.Action != "dump" {
 		serverId = e.ServerId
@@ -126,19 +168,17 @@ func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDupl
 		eventId = EventIdString(e.ServerId, e.TransactionId, e.TransactionEventNumber)
 	} else {
 		serverId = "dump"
-		transactionId = uint64(id)
-		eventId = EventIdString("dump", uint64(id), 0)
+		eventId = fmt.Sprintf("dump:%s#0", e.PkString())
 	}
 
-	Event[eventCreatedAtColumnName] = e.Timestamp
-	Event[eventActionColumnName] = e.Action
-	Event[eventServerIdColumnName] = serverId
-	Event[eventTransactionIdColumnName] = transactionId
-	Event[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
+	insertData[eventCreatedAtColumnName] = e.Timestamp
+	insertData[eventActionColumnName] = e.Action
+	insertData[eventServerIdColumnName] = serverId
+	insertData[eventTransactionIdColumnName] = transactionId
+	insertData[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
 
-	e.RecordId = id
 	e.EventId = eventId
-	e.InsertData = Event
+	e.InsertData = insertData
 
 	return false
 }
