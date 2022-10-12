@@ -116,6 +116,7 @@ func copyDumpStringValues(val *mysql.FieldValue) interface{} {
 func dumpTable(dbName, tableName string) error {
 	return withMysqlConnection(func(conn *client.Conn) error {
 		var result mysql.Result
+		var i uint64 = 1
 		return conn.ExecuteSelectStreaming("SELECT * FROM "+dbName+"."+tableName, &result, func(row []mysql.FieldValue) error {
 			values := make([]interface{}, len(row))
 
@@ -123,14 +124,15 @@ func dumpTable(dbName, tableName string) error {
 				values[idx] = copyDumpStringValues(&val)
 			}
 
-			processDumpData(dbName, tableName, values)
+			processDumpData(dbName, tableName, i, values)
+			i++
 
 			return nil
 		}, nil)
 	})
 }
 
-func processDumpData(dbName string, tableName string, values []interface{}) {
+func processDumpData(dbName string, tableName string, eventNumber uint64, values []interface{}) {
 	_, hasColumns := State.chColumns.ColumnsForTable(tableName)
 	if !hasColumns {
 		return
@@ -143,6 +145,9 @@ func processDumpData(dbName string, tableName string, values []interface{}) {
 		Rows:      [][]interface{}{values},
 		Timestamp: time.Now(),
 		Action:    DumpAction,
+		// imperfect, but effective enough since when dumping rows are returned in a consistent order
+		TransactionId: eventNumber,
+		ServerId:      "dump",
 	}
 
 	OnRow(&event)

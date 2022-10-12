@@ -278,22 +278,12 @@ func batchWrite() {
 	resetBatch()
 
 	deliver := func() {
-		// snapshot every 60 seconds with default settings
-		shouldSnapshotDuplicatesFilter := batchNumber%6 == 0
-
-		if shouldSnapshotDuplicatesFilter {
-			State.batchDuplicatesFilter.snapshotState()
-		}
 
 		// Could also get delay by peeking events periodicially to avoid computing it
 		delay := replicationDelay.Load()
 		log.Infoln("replication delay is", delay, "seconds")
 
 		deliverBatch(clickhouseDb, eventsByTable, firstGtidInBatch)
-
-		if shouldSnapshotDuplicatesFilter {
-			go State.batchDuplicatesFilter.writeState(&clickhouseDb)
-		}
 		batchNumber++
 		// if the batch sizes are relatively consistent, we want to recycle slices,
 		// if the difference between previous and current batch size is large enough
@@ -322,11 +312,6 @@ func batchWrite() {
 				resetBatch()
 			}
 		case e := <-State.batchWrite:
-			if e.Action != "dump" && State.batchDuplicatesFilter.TestAndAdd(e.EventId) {
-				Stats.IncrementSkippedLocallyFilteredDuplicates()
-				continue
-			}
-
 			if firstGtidInBatch == "" && !e.IsDumpEvent() {
 				firstGtidInBatch = e.GtidRangeString()
 			}

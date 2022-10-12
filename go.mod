@@ -6,17 +6,16 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.3.0
 	github.com/go-faster/city v1.0.1
 	github.com/go-mysql-org/go-mysql v1.6.0
+	github.com/goccy/go-json v0.9.11
 	github.com/goccy/go-yaml v1.9.5
 	github.com/google/uuid v1.3.0
 	github.com/peterbourgon/ff/v3 v3.3.0
-	github.com/pierrec/lz4/v4 v4.1.15
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/profile v1.6.0
 	github.com/prometheus/client_golang v1.13.0
 	github.com/shopspring/decimal v1.3.1
 	github.com/siddontang/go-log v0.0.0-20180807004314-8d05993dda07
 	github.com/stretchr/testify v1.8.0
-	github.com/tylertreat/BoomFilters v0.0.0-20210315201527-1a82519a3e43
 	go.uber.org/atomic v1.10.0
 	golang.org/x/exp v0.0.0-20220921164117-439092de6870
 )
@@ -26,11 +25,9 @@ require (
 	github.com/andybalholm/brotli v1.0.4 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
-	github.com/d4l3k/messagediff v1.2.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fatih/color v1.13.0 // indirect
 	github.com/go-faster/errors v0.6.1 // indirect
-	github.com/goccy/go-json v0.9.11 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/klauspost/compress v1.15.9 // indirect
 	github.com/kr/text v0.2.0 // indirect
@@ -39,6 +36,7 @@ require (
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/paulmach/orb v0.7.1 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pingcap/errors v0.11.5-0.20201126102027-b0a155152ca3 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/prometheus/client_model v0.2.0 // indirect

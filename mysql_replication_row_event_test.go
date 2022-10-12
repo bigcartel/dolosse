@@ -7,18 +7,7 @@ import (
 	"testing"
 
 	"github.com/go-mysql-org/go-mysql/schema"
-	"github.com/stretchr/testify/assert"
 )
-
-func TestEventIdString(t *testing.T) {
-	assert.Equal(t, EventIdString("server1", 88, 1), "server1:88#1")
-}
-
-func BenchmarkEventEventId(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		EventIdString("server1", 88, 1)
-	}
-}
 
 func TestEventToClickhouseRowData(t *testing.T) {
 	yamlColumnSetup()

@@ -12,19 +12,18 @@ import (
 var State GlobalState
 
 type GlobalState struct {
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	processRows           chan *MysqlReplicationRowEvent
-	batchWrite            chan *MysqlReplicationRowEvent
-	latestProcessingGtid  chan string
-	initiatedDump         atomic.Bool
-	mysqlPoolInitialized  atomic.Bool
-	mysqlPool             *client.Pool
-	chColumns             ChColumns
-	mysqlColumns          ConcurrentMap[*schema.Table]
-	dumpingTables         ConcurrentMap[struct{}]
-	batchDuplicatesFilter BatchDuplicatesFilter
-	cachedMatchers        CachedMatchers
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	processRows          chan *MysqlReplicationRowEvent
+	batchWrite           chan *MysqlReplicationRowEvent
+	latestProcessingGtid chan string
+	initiatedDump        atomic.Bool
+	mysqlPoolInitialized atomic.Bool
+	mysqlPool            *client.Pool
+	chColumns            ChColumns
+	mysqlColumns         ConcurrentMap[*schema.Table]
+	dumpingTables        ConcurrentMap[struct{}]
+	cachedMatchers       CachedMatchers
 }
 
 func NewGlobalState() *GlobalState {
@@ -64,8 +63,6 @@ func (s *GlobalState) Init() {
 	// to do it using clickhouse translated types for max compat
 	clickhouseDb.CheckSchema()
 
-	s.batchDuplicatesFilter = NewBatchDuplicatesFilter(BatchDuplicatesFilterSize)
-	s.batchDuplicatesFilter.loadState(&clickhouseDb)
 	s.chColumns.Sync(clickhouseDb)
 }
 
