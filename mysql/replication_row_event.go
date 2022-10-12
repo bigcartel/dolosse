@@ -1,11 +1,12 @@
-package main
+package mysql
 
 import (
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 	"time"
+
+	// TODO dependency inject these
 
 	"github.com/go-mysql-org/go-mysql/schema"
 )
@@ -58,44 +59,6 @@ func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 	}
 }
 
-func (e *MysqlReplicationRowEvent) InsertDataFromRows(columns *ChColumnSet) (data RowInsertData, isDuplicate bool) {
-	data = make(RowInsertData, len(columns.columns))
-
-	var previousRow []interface{}
-	tableName := e.Table.Name
-	hasPreviousEvent := len(e.Rows) == 2
-
-	newEventIdx := len(e.Rows) - 1
-
-	if hasPreviousEvent {
-		previousRow = e.Rows[0]
-	}
-
-	row := e.Rows[newEventIdx]
-
-	isDuplicate = false
-	if e.Action == "update" {
-		isDuplicate = true
-	}
-
-	for i, c := range e.Table.Columns {
-		columnName := c.Name
-		if columns.columnLookup[columnName] {
-			if isDuplicate &&
-				hasPreviousEvent &&
-				!State.cachedMatchers.MemoizedRegexpsMatch(columnName, Config.IgnoredColumnsForDeduplication) &&
-				!reflect.DeepEqual(row[i], previousRow[i]) {
-				isDuplicate = false
-			}
-
-			convertedValue := parseValue(row[i], c.Type, tableName, columnName)
-			data[c.Name] = convertedValue
-		}
-	}
-
-	return data, isDuplicate
-}
-
 func (e *MysqlReplicationRowEvent) PkString() string {
 	pksb := strings.Builder{}
 	pksb.Grow(len(e.Pks) * 8)
@@ -127,26 +90,4 @@ func (e *MysqlReplicationRowEvent) buildPk(insertData RowInsertData) (PKValues P
 	}
 
 	return PKValues
-}
-
-// TODO test with all types we care about - yaml conversion, etc.
-// dedupe for yaml columns according to filtered values?
-func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDuplicate bool) {
-	insertData, isDuplicate := e.InsertDataFromRows(columns)
-
-	if isDuplicate {
-		return true
-	}
-
-	e.Pks = e.buildPk(insertData)
-
-	insertData[eventCreatedAtColumnName] = e.Timestamp
-	insertData[eventActionColumnName] = e.Action
-	insertData[eventServerIdColumnName] = e.ServerId
-	insertData[eventTransactionIdColumnName] = e.TransactionId
-	insertData[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
-
-	e.InsertData = insertData
-
-	return false
 }

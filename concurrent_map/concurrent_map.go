@@ -1,4 +1,4 @@
-package main
+package concurrent_map
 
 import "sync"
 

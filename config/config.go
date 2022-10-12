@@ -1,17 +1,15 @@
-package main
+package config
 
 import (
 	"flag"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/peterbourgon/ff/v3"
-	"github.com/siddontang/go-log/log"
 )
 
-type GlobalConfig struct {
+type Config struct {
 	ClickhouseDb,
 	ClickhouseUsername,
 	ClickhouseAddr,
@@ -22,11 +20,9 @@ type GlobalConfig struct {
 	MysqlDb,
 	StartFromGtid *string
 
-	MysqlDbByte []byte
-
 	BatchSize,
 	ConcurrentBatchWrites,
-	ConcurrentMysqlDumpSelects *int
+	ConcurrentMysqlDumpQueries *int
 
 	BatchWriteInterval *time.Duration
 
@@ -39,6 +35,7 @@ type GlobalConfig struct {
 
 	AnonymizeFields,
 	IgnoredColumnsForDeduplication,
+	// TODO specialize these with type aliases to avoid bugs
 	YamlColumns []*regexp.Regexp
 }
 
@@ -51,8 +48,8 @@ func csvToRegexps(csv string) []*regexp.Regexp {
 	return fields
 }
 
-func (c *GlobalConfig) ParseFlags(args []string) {
-	*c = GlobalConfig{}
+func NewFromFlags(args []string) (Config, error) {
+	c := Config{}
 
 	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
 	// TODO add description talking about assumption and limitations.
@@ -78,7 +75,7 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.BatchSize = fs.Int("batch-size", 200000,
 		"Threshold of records needed to trigger batch write. Batch write will happen when either batch-write-interval since last batch write is exceeded, or this threshold is hit.")
 	c.ConcurrentBatchWrites = fs.Int("concurrent-batch-writes", 10, "Number of batch writes of different tables to clickhouse to run in parallel")
-	c.ConcurrentMysqlDumpSelects = fs.Int("concurrent-mysql-dump-selects", 4, "Number of concurrent select queries to run when dumping mysql db")
+	c.ConcurrentMysqlDumpQueries = fs.Int("concurrent-mysql-dump-selects", 4, "Number of concurrent select queries to run when dumping mysql db")
 
 	DumpTables := fs.String("force-dump-tables", "", "Comma separate list of tables to force dump")
 	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deduplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
@@ -101,15 +98,5 @@ func (c *GlobalConfig) ParseFlags(args []string) {
 	c.YamlColumns = csvToRegexps(*YamlColumns)
 	c.AnonymizeFields = csvToRegexps(*AnonymizeFields)
 
-	if err != nil {
-		if err.Error() != "error parsing commandline arguments: flag: help requested" {
-			log.Infoln(err)
-		}
-
-		os.Exit(1)
-	}
-
-	c.MysqlDbByte = []byte(*Config.MysqlDb)
+	return c, err
 }
-
-var Config = GlobalConfig{}

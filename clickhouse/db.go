@@ -1,36 +1,44 @@
-package main
+package clickhouse
 
 import (
 	"context"
 	"fmt"
 	"os"
-	"reflect"
 	"strings"
+
+	"bigcartel/dolosse/clickhouse/cached_columns"
+	"bigcartel/dolosse/consts"
+	"bigcartel/dolosse/err_utils"
+	"bigcartel/dolosse/mysql"
+	"bigcartel/dolosse/set"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/go-mysql-org/go-mysql/mysql"
+	gomysql "github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/siddontang/go-log/log"
 )
 
 type ClickhouseDb struct {
-	conn driver.Conn
+	Conn   driver.Conn
+	Ctx    context.Context
+	Config Config
 }
 
-const eventCreatedAtColumnName = "changelog_event_created_at"
-const eventActionColumnName = "changelog_action"
-const eventServerIdColumnName = "changelog_gtid_server_id"
-const eventTransactionIdColumnName = "changelog_gtid_transaction_id"
-const eventTransactionEventNumberColumnName = "changelog_gtid_transaction_event_number"
-const gtidSetKey = "last_synced_gtid_set"
+type Config struct {
+	Address  string
+	Username string
+	Password string
+	DbName   string
+}
 
-func establishClickhouseConnection() (ClickhouseDb, error) {
+func EstablishClickhouseConnection(ctx context.Context, config Config) (ClickhouseDb, error) {
+
 	clickhouseConn, err := clickhouse.Open(&clickhouse.Options{
-		Addr: []string{*Config.ClickhouseAddr},
+		Addr: []string{config.Address},
 		Auth: clickhouse.Auth{
 			Database: "default",
-			Username: *Config.ClickhouseUsername,
-			Password: *Config.ClickhousePassword,
+			Username: config.Username,
+			Password: config.Password,
 		},
 		Compression: &clickhouse.Compression{Method: clickhouse.CompressionLZ4, Level: 1},
 		Settings: clickhouse.Settings{
@@ -40,11 +48,13 @@ func establishClickhouseConnection() (ClickhouseDb, error) {
 	})
 
 	return ClickhouseDb{
-		conn: clickhouseConn,
+		Conn:   clickhouseConn,
+		Config: config,
+		Ctx:    ctx,
 	}, err
 }
 
-func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks Pks, maxPks Pks) (bool, Set[string]) {
+func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks mysql.Pks, maxPks mysql.Pks) (bool, set.Set[string]) {
 	var pkq string
 	whereClauses := make([]string, 0, len(minPks))
 
@@ -86,12 +96,12 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks Pks, maxPks Pks)
 		tableWithDb,
 		whereClause)
 
-	pksSet := make(Set[string], 10000)
+	pksSet := make(set.Set[string], 10000)
 
-	rows := unwrap(db.conn.Query(State.ctx, queryString))
+	rows := err_utils.Unwrap(db.Conn.Query(db.Ctx, queryString))
 	for rows.Next() {
 		var s string
-		must(rows.Scan(&s))
+		err_utils.Must(rows.Scan(&s))
 		pksSet.Add(s)
 	}
 
@@ -100,20 +110,20 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks Pks, maxPks Pks)
 	return len(pksSet) > 0, pksSet
 }
 
-func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxValues) (bool, Set[DuplicateBinlogEventKey]) {
+func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues mysql.MinMaxValues) (bool, set.Set[mysql.DuplicateBinlogEventKey]) {
 	whereClauses := make([]string, 0, len(minMaxValues.ValuesByServerId))
 	for serverId, minMax := range minMaxValues.ValuesByServerId {
 		whereClauses = append(whereClauses,
 			fmt.Sprintf("(%s = '%s' and %s >= %d and %s <= %d)",
-				eventServerIdColumnName,
+				consts.EventServerIdColumnName,
 				serverId,
-				eventTransactionIdColumnName,
+				consts.EventTransactionIdColumnName,
 				minMax.MinTransactionId,
-				eventTransactionIdColumnName,
+				consts.EventTransactionIdColumnName,
 				minMax.MaxTransactionId))
 	}
 
-	duplicatesMap := make(Set[DuplicateBinlogEventKey], 2)
+	duplicatesMap := make(set.Set[mysql.DuplicateBinlogEventKey], 2)
 
 	if len(whereClauses) == 0 {
 		return false, duplicatesMap
@@ -125,17 +135,17 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxV
 		SELECT
 		%s, %s, %s
 		FROM %s WHERE %s`,
-		eventServerIdColumnName,
-		eventTransactionIdColumnName,
-		eventTransactionEventNumberColumnName,
+		consts.EventServerIdColumnName,
+		consts.EventTransactionIdColumnName,
+		consts.EventTransactionEventNumberColumnName,
 		tableWithDb,
 		whereClause)
 
-	duplicates := unwrap(db.conn.Query(State.ctx, queryString))
+	duplicates := err_utils.Unwrap(db.Conn.Query(db.Ctx, queryString))
 
 	for duplicates.Next() {
-		duplicateKey := DuplicateBinlogEventKey{}
-		must(duplicates.ScanStruct(&duplicateKey))
+		duplicateKey := mysql.DuplicateBinlogEventKey{}
+		err_utils.Must(duplicates.ScanStruct(&duplicateKey))
 		duplicatesMap.Add(duplicateKey)
 	}
 
@@ -143,29 +153,19 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues MinMaxV
 }
 
 func (db *ClickhouseDb) Setup() {
-	must(db.conn.Exec(State.ctx, fmt.Sprintf("create database if not exists %s", *Config.ClickhouseDb)))
+	err_utils.Must(db.Conn.Exec(db.Ctx, fmt.Sprintf("create database if not exists %s", db.Config.DbName)))
 
-	must(db.conn.Exec(State.ctx, fmt.Sprintf(`
+	err_utils.Must(db.Conn.Exec(db.Ctx, fmt.Sprintf(`
 		create table if not exists %s.binlog_sync_state (
 			key String,
 			value String
-	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, *Config.ClickhouseDb)))
+	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, db.Config.DbName)))
 }
 
-// unfortunately we can't get reflect types when querying all tables at once
-// so this is a separate type from ClickhouseQueryColumn
-type ChColumnInfo struct {
-	Name  string `ch:"name"`
-	Table string `ch:"table"`
-	Type  string `ch:"type"`
-}
-
-type ChColumnMap map[string][]ChColumnInfo
-
-func (db *ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
-	mysqlTables := getMysqlTableNames()
+func (db *ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryable) cached_columns.ChColumnMap {
+	mysqlTables := my.GetMysqlTableNames()
 	clickhouseTableMap := db.getColumnMap()
-	columnsForTables := make(ChColumnMap, len(mysqlTables))
+	columnsForTables := make(cached_columns.ChColumnMap, len(mysqlTables))
 
 	for _, name := range mysqlTables {
 		columns := clickhouseTableMap[name]
@@ -177,20 +177,20 @@ func (db *ClickhouseDb) ColumnsForMysqlTables() ChColumnMap {
 	return columnsForTables
 }
 
-func (db *ClickhouseDb) getColumnMap() ChColumnMap {
-	rows := unwrap(db.conn.Query(context.Background(),
-		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, *Config.ClickhouseDb)))
+func (db *ClickhouseDb) getColumnMap() cached_columns.ChColumnMap {
+	rows := err_utils.Unwrap(db.Conn.Query(db.Ctx,
+		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, db.Config.DbName)))
 
-	columns := make(ChColumnMap, 0)
+	columns := make(cached_columns.ChColumnMap, 0)
 
 	for rows.Next() {
-		columnInfo := ChColumnInfo{}
-		must(rows.ScanStruct(&columnInfo))
+		columnInfo := cached_columns.ChColumnInfo{}
+		err_utils.Must(rows.ScanStruct(&columnInfo))
 
 		tableName := columnInfo.Table
 
 		if columns[tableName] == nil {
-			columns[tableName] = make([]ChColumnInfo, 0)
+			columns[tableName] = make([]cached_columns.ChColumnInfo, 0)
 		}
 
 		columns[tableName] = append(columns[tableName], columnInfo)
@@ -205,8 +205,8 @@ type RequiredColumn = struct {
 	IsValid bool
 }
 
-func (db *ClickhouseDb) CheckSchema() {
-	clickhouseColumnsByTable := db.ColumnsForMysqlTables()
+func (db *ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
+	clickhouseColumnsByTable := db.ColumnsForMysqlTables(my)
 
 	invalidTableMessages := make([]string, 0, len(clickhouseColumnsByTable))
 
@@ -216,11 +216,11 @@ func (db *ClickhouseDb) CheckSchema() {
 		}
 
 		requiredColumns := []RequiredColumn{
-			{eventCreatedAtColumnName, "DateTime64(9)", false},
-			{eventActionColumnName, "LowCardinality(String)", false},
-			{eventServerIdColumnName, "LowCardinality(String)", false},
-			{eventTransactionIdColumnName, "UInt64", false},
-			{eventTransactionEventNumberColumnName, "UInt32", false},
+			{consts.EventCreatedAtColumnName, "DateTime64(9)", false},
+			{consts.EventActionColumnName, "LowCardinality(String)", false},
+			{consts.EventServerIdColumnName, "LowCardinality(String)", false},
+			{consts.EventTransactionIdColumnName, "UInt64", false},
+			{consts.EventTransactionEventNumberColumnName, "UInt32", false},
 		}
 
 		for _, column := range columns {
@@ -257,28 +257,23 @@ func (db *ClickhouseDb) CheckSchema() {
 	}
 }
 
-type ClickhouseQueryColumn struct {
-	Name string
-	Type reflect.Type
-}
-
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
-func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMap) {
-	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, *Config.ClickhouseDb, table)
-	rows, err := db.conn.Query(context.Background(), queryString)
+func (db *ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColumns, map[string]bool) {
+	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, db.Config.DbName, table)
+	rows, err := db.Conn.Query(db.Ctx, queryString)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "doesn't exist") {
-			return make([]ClickhouseQueryColumn, 0), LookupMap{}
+			return make(cached_columns.ClickhouseQueryColumns, 0), map[string]bool{}
 		} else {
 			log.Panicln(err, "- query -", queryString)
 		}
 	}
 
 	columnTypes := rows.ColumnTypes()
-	var columns = make([]ClickhouseQueryColumn, len(columnTypes))
-	columnNameLookup := make(LookupMap, len(columnTypes))
+	var columns = make([]cached_columns.ClickhouseQueryColumn, len(columnTypes))
+	columnNameLookup := make(map[string]bool, len(columnTypes))
 
 	for i, columnType := range columnTypes {
 		columnName := columnType.Name()
@@ -286,7 +281,7 @@ func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMa
 
 		columnNameLookup[columnName] = true
 
-		columns[i] = ClickhouseQueryColumn{
+		columns[i] = cached_columns.ClickhouseQueryColumn{
 			Name: columnName,
 			Type: columnReflectScanType,
 		}
@@ -295,15 +290,15 @@ func (db *ClickhouseDb) Columns(table string) ([]ClickhouseQueryColumn, LookupMa
 	return columns, columnNameLookup
 }
 
-func (db *ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
-	gtidString := db.GetStateString(gtidSetKey)
+func (db *ClickhouseDb) GetGTIDSet(fallback string) gomysql.GTIDSet {
+	gtidString := db.GetStateString(consts.GtidSetKey)
 
 	if gtidString == "" {
 		gtidString = fallback
 	}
 
 	log.Infoln("read gtid set", gtidString)
-	set, err := mysql.ParseMysqlGTIDSet(gtidString)
+	set, err := gomysql.ParseMysqlGTIDSet(gtidString)
 
 	if err != nil {
 		log.Fatal(err)
@@ -313,7 +308,7 @@ func (db *ClickhouseDb) GetGTIDSet(fallback string) mysql.GTIDSet {
 }
 
 func (db *ClickhouseDb) SetGTIDString(s string) {
-	db.SetStateString(gtidSetKey, s)
+	db.SetStateString(consts.GtidSetKey, s)
 	log.Infoln("persisted gtid set", s)
 }
 
@@ -342,9 +337,9 @@ func (db *ClickhouseDb) GetStateString(key string) string {
 
 	var rows []storedKeyValue
 
-	must(db.conn.Select(context.Background(),
+	err_utils.Must(db.Conn.Select(context.Background(),
 		&rows,
-		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", *Config.ClickhouseDb),
+		fmt.Sprintf("select value from %s.binlog_sync_state where key = $1", db.Config.DbName),
 		key))
 
 	value := ""
@@ -356,8 +351,8 @@ func (db *ClickhouseDb) GetStateString(key string) string {
 }
 
 func (db *ClickhouseDb) SetStateString(key, value string) {
-	err := db.conn.Exec(context.Background(),
-		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", *Config.ClickhouseDb),
+	err := db.Conn.Exec(context.Background(),
+		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", db.Config.DbName),
 		key,
 		value)
 
