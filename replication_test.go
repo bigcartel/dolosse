@@ -55,7 +55,6 @@ func execChStatements(chDb ClickhouseDb, statements ...string) {
 
 func startTestSync(ch ClickhouseDb) {
 	initState(true)
-	State.batchDuplicatesFilter.resetState(&ch)
 	startSync()
 }
 
@@ -261,7 +260,6 @@ func TestReplicationAndDump(t *testing.T) {
 		State.cancel()
 		*Config.Rewind = true
 
-		State.batchDuplicatesFilter.resetState(&clickhouseConn)
 		go startTestSync(clickhouseConn)
 
 		time.Sleep(100 * time.Millisecond)

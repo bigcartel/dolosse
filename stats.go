@@ -13,7 +13,6 @@ type GlobalStats struct {
 	EnqueuedRows,
 	ProcessedRows,
 	SkippedRowLevelDuplicates,
-	SkippedLocallyFilterDuplicates,
 	SkippedPersistedDuplicates,
 	SkippedDumpDuplicates uint64
 
@@ -21,7 +20,6 @@ type GlobalStats struct {
 	promEnqueuedRows,
 	promProcessedRows,
 	promSkippedRowLevelDuplicates,
-	promSkippedLocallyFilterDuplicates,
 	promSkippedPersistedDuplicates,
 	promSkippedDumpDuplicates prometheus.Counter
 }
@@ -45,7 +43,6 @@ func (s *GlobalStats) Init(testing bool) {
 	s.promEnqueuedRows = *newPrometheusCounter("enqueued_rows", "Total number of rows enqueued for processing", testing)
 	s.promProcessedRows = *newPrometheusCounter("processed_rows", "Total number of rows parsed (processed)", testing)
 	s.promSkippedRowLevelDuplicates = *newPrometheusCounter("skipped_row_level_duplicates", "Total number of rows skipped because current and previous row don't differ with respect to the columns included in the clickhouse table", testing)
-	s.promSkippedLocallyFilterDuplicates = *newPrometheusCounter("skipped_locally_filtered_duplicates", "Total number of rows skipped because they caught by in memory inverse bloom filter", testing)
 	s.promSkippedPersistedDuplicates = *newPrometheusCounter("skipped_persisted_duplicates", "Total number of rows skipped because duplicates were found in clickhouse", testing)
 	s.promSkippedDumpDuplicates = *newPrometheusCounter("skipped_dump_duplicates", "Total number of rows skipped during dump because rows with the same id already exist in clickhouse", testing)
 }
@@ -70,11 +67,6 @@ func (s *GlobalStats) IncrementSkippedRowLevelDuplicates() {
 	s.promSkippedRowLevelDuplicates.Add(1)
 }
 
-func (s *GlobalStats) IncrementSkippedLocallyFilteredDuplicates() {
-	s.incrementStat(&s.SkippedLocallyFilterDuplicates)
-	s.promSkippedLocallyFilterDuplicates.Add(1)
-}
-
 func (s *GlobalStats) IncrementSkippedPersistedDuplicates() {
 	s.incrementStat(&s.SkippedPersistedDuplicates)
 	s.promSkippedPersistedDuplicates.Add(1)
@@ -94,7 +86,6 @@ func (s GlobalStats) Print() {
 	log.Infoln(s.EnqueuedRows, "enqueued rows")
 	log.Infoln(s.DeliveredRows, "delivered rows")
 	log.Infoln(s.SkippedRowLevelDuplicates, "skipped row level duplicate rows")
-	log.Infoln(s.SkippedLocallyFilterDuplicates, "skipped locally filtered duplicate rows")
 	log.Infoln(s.SkippedPersistedDuplicates, "skipped persisted duplicate rows")
 	log.Infoln(s.SkippedDumpDuplicates, "skipped dump duplicate rows")
 }
