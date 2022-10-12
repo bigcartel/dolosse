@@ -142,7 +142,7 @@ func processDumpData(dbName string, tableName string, values []interface{}) {
 		Table:     tableInfo,
 		Rows:      [][]interface{}{values},
 		Timestamp: time.Now(),
-		Action:    "dump",
+		Action:    DumpAction,
 	}
 
 	OnRow(&event)

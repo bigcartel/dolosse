@@ -16,18 +16,6 @@ import (
 	"github.com/siddontang/go-log/log"
 )
 
-func toInt64(intOrUint interface{}) int64 {
-	n := reflect.ValueOf(intOrUint)
-	if n.CanInt() {
-		return n.Int()
-	} else if n.CanUint() {
-		return int64(n.Uint())
-	}
-
-	log.Fatalf("Failed parsing %v to int64", intOrUint)
-	return 0
-}
-
 func parseString(value string, tableName string, columnName string) interface{} {
 	var out interface{}
 

@@ -18,6 +18,7 @@ func makeRowEvent() *MysqlReplicationRowEvent {
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "id"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "name"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "description"})
+	table.PKColumns = []int{0}
 	replicationRowEvent.Table = &table
 	rows := make([][]interface{}, 0)
 	rows = append(rows, []interface{}{12, "asdfe", "cool"})

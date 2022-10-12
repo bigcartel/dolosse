@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -105,20 +106,28 @@ func getTestRows(t *testing.T, chDb ClickhouseDb, expectedRowCount int) []TestRo
 	return getChRows[TestRow](t, chDb, "select id, name, price, description, changelog_action from test.test order by changelog_event_created_at asc", expectedRowCount)
 }
 
-func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
-	execMysqlStatements(mysqlConn, `
+func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb, two_pks bool) {
+	pks := "PRIMARY KEY (id)"
+
+	if two_pks {
+		pks = "PRIMARY KEY (id, label)"
+	}
+
+	execMysqlStatements(mysqlConn, fmt.Sprintf(`
 			RESET MASTER;
 			CREATE DATABASE IF NOT EXISTS test;
 			USE test;
 			DROP TABLE IF EXISTS test;
 			CREATE TABLE test (
 				id int unsigned NOT NULL AUTO_INCREMENT,
+				account_id int unsigned NOT NULL DEFAULT 0,
+				label varchar(100) NOT NULL DEFAULT 'asdf',
 				name varchar(100) NOT NULL DEFAULT '',
 				price decimal(10,2) NOT NULL DEFAULT '0.00',
 				visits int NOT NULL DEFAULT 0,
 				description text,
 				created_at datetime NOT NULL DEFAULT NOW(),
-				PRIMARY KEY (id)
+				%s
 			);
 			INSERT INTO test (id, name, price, description, created_at)
 			VALUES (
@@ -132,7 +141,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 			UPDATE test SET visits=1 WHERE id = 1;
 			UPDATE test SET price="12.33" WHERE id = 1;
 			UPDATE test SET visits=2 WHERE id = 1;
-			`)
+			`, pks))
 
 	execChStatements(clickhouseConn,
 		`DROP DATABASE IF EXISTS test`,
@@ -156,7 +165,30 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 
 func TestBasicReplication(t *testing.T) {
 	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
-		InitDbs(mysqlConn, clickhouseConn)
+		InitDbs(mysqlConn, clickhouseConn, false)
+
+		go startTestSync(clickhouseConn)
+
+		time.Sleep(100 * time.Millisecond)
+
+		r := getTestRows(t, clickhouseConn, 2)
+		log.Infoln(r)
+
+		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
+		assert.Equal(t, "test thing", r[0].Name, "replicated name should match")
+		assert.Equal(t, unwrap(decimal.NewFromString("12.31")), r[0].Price, "replicated price should match")
+		assert.Equal(t, "my cool description", r[0].Description, "replicated description should match")
+		assert.Equal(t, unwrap(decimal.NewFromString("12.33")), r[1].Price, "second replicated price should match")
+
+		State.cancel()
+		time.Sleep(100 * time.Millisecond)
+	})
+}
+
+func TestCompositePkReplication(t *testing.T) {
+	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
+		InitDbs(mysqlConn, clickhouseConn, true)
+		execChStatements(clickhouseConn, "ALTER TABLE test.test ADD COLUMN label String")
 
 		go startTestSync(clickhouseConn)
 
@@ -178,7 +210,7 @@ func TestBasicReplication(t *testing.T) {
 
 func TestReplicationAndDump(t *testing.T) {
 	withDbSetup(t, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
-		InitDbs(mysqlConn, clickhouseConn)
+		InitDbs(mysqlConn, clickhouseConn, false)
 
 		// Unsure why I have to start with ithis nsert statement, but replication
 		// from GTID event id 1 won't pick up on the first 1 insert after a reset
@@ -262,7 +294,7 @@ func BenchmarkFullRun(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		withDbSetup(b, func(mysqlConn *client.Conn, clickhouseConn ClickhouseDb) {
 			Stats.Init(true)
-			InitDbs(mysqlConn, clickhouseConn)
+			InitDbs(mysqlConn, clickhouseConn, false)
 
 			// Unsure why I have to start with ithis nsert statement, but replication
 			// from GTID event id 1 won't pick up on the first 1 insert after a reset

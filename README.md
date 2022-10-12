@@ -1,6 +1,6 @@
 TODO fill this out
 
-This tool assumes that all tables being replicated have a primary key column called `id`
+This tool assumes that all tables being replicated have a primary key, but if they don't it will still work, it just won't deduplicate dump events.
 
 When creating your schema, it's important to consider making sure the deduplication queries run quickly enough:
 

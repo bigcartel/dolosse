@@ -31,12 +31,12 @@ func TestEventToClickhouseRowData(t *testing.T) {
 		t.Error("Expected row not to be flagged as duplicate")
 	}
 
-	if rowEvent.RecordId != 12 {
-		t.Errorf("Expected id to be 12, got %d", rowEvent.RecordId)
+	if rowEvent.PkString() != "12" {
+		t.Errorf("Expected id to be 12, got %s", rowEvent.PkString())
 	}
 
 	if rowEvent.InsertData["id"] != 12 {
-		t.Errorf("Expected Event['id'] to be 12, got %d", rowEvent.RecordId)
+		t.Errorf("Expected Event['id'] to be 12, got %d", rowEvent.InsertData["id"])
 	}
 
 	if rowEvent.InsertData["name"] != "asdf" {
@@ -249,6 +249,7 @@ shipping:
 	table := schema.Table{Name: "test_table"}
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "id"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "yaml_column"})
+	table.PKColumns = []int{0}
 	replicationRowEvent.Table = &table
 	rows := make([][]interface{}, 0)
 	rows = append(rows, []interface{}{12, "old_yaml"})
@@ -261,8 +262,8 @@ shipping:
 		t.Error("Expected row not to be flagged as duplicate")
 	}
 
-	if replicationRowEvent.RecordId != 12 {
-		t.Errorf("Expected id to be 12, got %d", replicationRowEvent.RecordId)
+	if replicationRowEvent.PkString() != "12" {
+		t.Errorf("Expected id to be 12, got %s", replicationRowEvent.PkString())
 	}
 
 	if strings.Contains(string(replicationRowEvent.InsertData["yaml_column"].([]byte)), "2 Rose Cottages") {
