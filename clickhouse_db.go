@@ -91,7 +91,7 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks Pks, maxPks Pks)
 	rows := unwrap(db.conn.Query(State.ctx, queryString))
 	for rows.Next() {
 		var s string
-		rows.Scan(&s)
+		must(rows.Scan(&s))
 		pksSet.Add(s)
 	}
 

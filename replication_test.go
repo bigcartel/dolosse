@@ -69,7 +69,7 @@ func getChRows[T any](t *testing.T, chDb ClickhouseDb, query string, expectedRow
 		ts := make([]T, 0, 1000)
 		for result.Next() {
 			var t T
-			result.ScanStruct(&t)
+			must(result.ScanStruct(&t))
 			ts = append(ts, t)
 		}
 
