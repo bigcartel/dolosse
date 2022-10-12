@@ -25,29 +25,11 @@ type MysqlReplicationRowEvent struct {
 	TransactionId          uint64
 	Action                 string
 	ServerId               string
-	EventId                string
 	Table                  *schema.Table
 	InsertData             RowInsertData
 	Pks                    []Pk
 	Timestamp              time.Time
 	Rows                   [][]interface{}
-}
-
-// TODO replace this with storing event data in 3 columns
-func EventIdString(serverId string, gtidNum uint64, gtidEventCount uint32) string {
-	gtid := strconv.FormatUint(gtidNum, 10)
-	gtidCount := strconv.FormatUint(uint64(gtidEventCount), 10)
-
-	// optimized to reduce allocations vs sprintf or string concatenation.
-	eid := strings.Builder{}
-	eid.Grow(len(serverId) + len(gtid) + len(gtidCount) + 2)
-	eid.WriteString(serverId)
-	eid.WriteRune(':')
-	eid.WriteString(gtid)
-	eid.WriteRune('#')
-	eid.WriteString(gtidCount)
-
-	return eid.String()
 }
 
 func (e *MysqlReplicationRowEvent) IsDumpEvent() bool {
@@ -158,26 +140,12 @@ func (e *MysqlReplicationRowEvent) ParseInsertData(columns *ChColumnSet) (IsDupl
 
 	e.Pks = e.buildPk(insertData)
 
-	var serverId, eventId string
-	var transactionId uint64
-
-	// TODO re-evaluate the use of this - it's only needed now for the local dedupe..
-	if e.Action != "dump" {
-		serverId = e.ServerId
-		transactionId = e.TransactionId
-		eventId = EventIdString(e.ServerId, e.TransactionId, e.TransactionEventNumber)
-	} else {
-		serverId = "dump"
-		eventId = fmt.Sprintf("dump:%s#0", e.PkString())
-	}
-
 	insertData[eventCreatedAtColumnName] = e.Timestamp
 	insertData[eventActionColumnName] = e.Action
-	insertData[eventServerIdColumnName] = serverId
-	insertData[eventTransactionIdColumnName] = transactionId
+	insertData[eventServerIdColumnName] = e.ServerId
+	insertData[eventTransactionIdColumnName] = e.TransactionId
 	insertData[eventTransactionEventNumberColumnName] = e.TransactionEventNumber
 
-	e.EventId = eventId
 	e.InsertData = insertData
 
 	return false
