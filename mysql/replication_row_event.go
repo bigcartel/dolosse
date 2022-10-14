@@ -26,14 +26,14 @@ type MysqlReplicationRowEvent struct {
 	TransactionId          uint64
 	Action                 string
 	ServerId               string
+	Timestamp              time.Time
 	Table                  *schema.Table
 	InsertData             RowInsertData
 	Pks                    []Pk
-	Timestamp              time.Time
 	Rows                   [][]interface{}
 }
 
-func (e *MysqlReplicationRowEvent) IsDumpEvent() bool {
+func (e MysqlReplicationRowEvent) IsDumpEvent() bool {
 	return e.Action == DumpAction
 }
 
@@ -43,7 +43,7 @@ type DuplicateBinlogEventKey = struct {
 	ServerId               string `ch:"changelog_gtid_server_id"`
 }
 
-func (e *MysqlReplicationRowEvent) DedupeKey() DuplicateBinlogEventKey {
+func (e MysqlReplicationRowEvent) DedupeKey() DuplicateBinlogEventKey {
 	return DuplicateBinlogEventKey{
 		ServerId:               e.ServerId,
 		TransactionId:          e.TransactionId,
@@ -51,7 +51,7 @@ func (e *MysqlReplicationRowEvent) DedupeKey() DuplicateBinlogEventKey {
 	}
 }
 
-func (e *MysqlReplicationRowEvent) GtidRangeString() string {
+func (e MysqlReplicationRowEvent) GtidRangeString() string {
 	if !e.IsDumpEvent() {
 		return e.ServerId + ":1-" + strconv.FormatUint(e.TransactionId, 10)
 	} else {
@@ -59,7 +59,7 @@ func (e *MysqlReplicationRowEvent) GtidRangeString() string {
 	}
 }
 
-func (e *MysqlReplicationRowEvent) PkString() string {
+func (e MysqlReplicationRowEvent) PkString() string {
 	pksb := strings.Builder{}
 	pksb.Grow(len(e.Pks) * 8)
 
@@ -74,7 +74,7 @@ func (e *MysqlReplicationRowEvent) PkString() string {
 	return pksb.String()
 }
 
-func (e *MysqlReplicationRowEvent) buildPk(insertData RowInsertData) (PKValues Pks) {
+func (e MysqlReplicationRowEvent) buildPk(insertData RowInsertData) (PKValues Pks) {
 	PKValues = make(Pks, 0, len(e.Table.PKColumns))
 
 	for _, idx := range e.Table.PKColumns {

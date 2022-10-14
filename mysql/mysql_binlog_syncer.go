@@ -30,7 +30,7 @@ func updateReplicationDelay(eventTime uint32) {
 
 type PerSecondEventCountMap = map[uint64]uint32
 
-func (my *Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error {
+func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:         uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
 		HeartbeatPeriod:  60 * time.Second,
@@ -152,7 +152,7 @@ func (my *Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error
 					TransactionId:          eventTransactionId,
 				}
 
-				OnRow(&rowE)
+				OnRow(rowE)
 				EventTransactionEventNumber++
 			}
 

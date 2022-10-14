@@ -54,7 +54,7 @@ func EstablishClickhouseConnection(ctx context.Context, config Config) (Clickhou
 	}, err
 }
 
-func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks mysql.Pks, maxPks mysql.Pks) (bool, set.Set[string]) {
+func (db ClickhouseDb) QueryIdRange(tableWithDb string, minPks mysql.Pks, maxPks mysql.Pks) (bool, set.Set[string]) {
 	var pkq string
 	whereClauses := make([]string, 0, len(minPks))
 
@@ -110,7 +110,7 @@ func (db *ClickhouseDb) QueryIdRange(tableWithDb string, minPks mysql.Pks, maxPk
 	return len(pksSet) > 0, pksSet
 }
 
-func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues mysql.MinMaxValues) (bool, set.Set[mysql.DuplicateBinlogEventKey]) {
+func (db ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues mysql.MinMaxValues) (bool, set.Set[mysql.DuplicateBinlogEventKey]) {
 	whereClauses := make([]string, 0, len(minMaxValues.ValuesByServerId))
 	for serverId, minMax := range minMaxValues.ValuesByServerId {
 		whereClauses = append(whereClauses,
@@ -152,7 +152,7 @@ func (db *ClickhouseDb) QueryDuplicates(tableWithDb string, minMaxValues mysql.M
 	return len(duplicatesMap) > 0, duplicatesMap
 }
 
-func (db *ClickhouseDb) Setup() {
+func (db ClickhouseDb) Setup() {
 	err_utils.Must(db.Conn.Exec(db.Ctx, fmt.Sprintf("create database if not exists %s", db.Config.DbName)))
 
 	err_utils.Must(db.Conn.Exec(db.Ctx, fmt.Sprintf(`
@@ -162,7 +162,7 @@ func (db *ClickhouseDb) Setup() {
 	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, db.Config.DbName)))
 }
 
-func (db *ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryable) cached_columns.ChColumnMap {
+func (db ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryable) cached_columns.ChColumnMap {
 	mysqlTables := my.GetMysqlTableNames()
 	clickhouseTableMap := db.getColumnMap()
 	columnsForTables := make(cached_columns.ChColumnMap, len(mysqlTables))
@@ -177,7 +177,7 @@ func (db *ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryabl
 	return columnsForTables
 }
 
-func (db *ClickhouseDb) getColumnMap() cached_columns.ChColumnMap {
+func (db ClickhouseDb) getColumnMap() cached_columns.ChColumnMap {
 	rows := err_utils.Unwrap(db.Conn.Query(db.Ctx,
 		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, db.Config.DbName)))
 
@@ -205,7 +205,7 @@ type RequiredColumn = struct {
 	IsValid bool
 }
 
-func (db *ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
+func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 	clickhouseColumnsByTable := db.ColumnsForMysqlTables(my)
 
 	invalidTableMessages := make([]string, 0, len(clickhouseColumnsByTable))
@@ -259,7 +259,7 @@ func (db *ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
-func (db *ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColumns, map[string]bool) {
+func (db ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColumns, map[string]bool) {
 	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, db.Config.DbName, table)
 	rows, err := db.Conn.Query(db.Ctx, queryString)
 
@@ -290,7 +290,7 @@ func (db *ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryCol
 	return columns, columnNameLookup
 }
 
-func (db *ClickhouseDb) GetGTIDSet(fallback string) gomysql.GTIDSet {
+func (db ClickhouseDb) GetGTIDSet(fallback string) gomysql.GTIDSet {
 	gtidString := db.GetStateString(consts.GtidSetKey)
 
 	if gtidString == "" {
@@ -307,21 +307,21 @@ func (db *ClickhouseDb) GetGTIDSet(fallback string) gomysql.GTIDSet {
 	return set
 }
 
-func (db *ClickhouseDb) SetGTIDString(s string) {
+func (db ClickhouseDb) SetGTIDString(s string) {
 	db.SetStateString(consts.GtidSetKey, s)
 	log.Infoln("persisted gtid set", s)
 }
 
-func (db *ClickhouseDb) tableDumpedKey(table string) string {
+func (db ClickhouseDb) tableDumpedKey(table string) string {
 	return fmt.Sprintf("dumped-%s", table)
 }
 
-func (db *ClickhouseDb) GetTableDumped(table string) bool {
+func (db ClickhouseDb) GetTableDumped(table string) bool {
 	tableDumped := db.GetStateString(db.tableDumpedKey(table))
 	return tableDumped == "true"
 }
 
-func (db *ClickhouseDb) SetTableDumped(table string, dumped bool) {
+func (db ClickhouseDb) SetTableDumped(table string, dumped bool) {
 	val := "false"
 	if dumped {
 		val = "true"
@@ -330,7 +330,7 @@ func (db *ClickhouseDb) SetTableDumped(table string, dumped bool) {
 	db.SetStateString(db.tableDumpedKey(table), val)
 }
 
-func (db *ClickhouseDb) GetStateString(key string) string {
+func (db ClickhouseDb) GetStateString(key string) string {
 	type storedKeyValue struct {
 		Value string `ch:"value"`
 	}
@@ -350,7 +350,7 @@ func (db *ClickhouseDb) GetStateString(key string) string {
 	return value
 }
 
-func (db *ClickhouseDb) SetStateString(key, value string) {
+func (db ClickhouseDb) SetStateString(key, value string) {
 	err := db.Conn.Exec(context.Background(),
 		fmt.Sprintf("insert into %s.binlog_sync_state (key, value) values ($1, $2)", db.Config.DbName),
 		key,

@@ -14,12 +14,12 @@ type MinMaxValuesMap map[string]struct {
 	MaxTransactionId uint64
 }
 
-func GetMinMaxValues(rows *[]*MysqlReplicationRowEvent) MinMaxValues {
+func GetMinMaxValues(rows []MysqlReplicationRowEvent) MinMaxValues {
 	valuesByServerId := make(MinMaxValuesMap, 1)
 	var minDumpPks,
 		maxDumpPks Pks
 
-	for _, r := range *rows {
+	for _, r := range rows {
 		comparingTransactionId := r.TransactionId
 		currentMinMax := valuesByServerId[r.ServerId]
 

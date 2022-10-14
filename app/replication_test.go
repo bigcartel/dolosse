@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+const batchSize = 10000
+
 func withDbSetup(t testing.TB, f func(app *App, mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb)) {
 	app := NewApp(true, []string{
 		"--mysql-addr=0.0.0.0:3307",
@@ -24,6 +26,7 @@ func withDbSetup(t testing.TB, f func(app *App, mysqlConn *client.Conn, clickhou
 		"--mysql-password=",
 		"--clickhouse-addr=0.0.0.0:9001",
 		"--batch-write-interval=10ms",
+		fmt.Sprintf("--batch-size=%d", batchSize),
 		"--clickhouse-db=test",
 	})
 
@@ -305,11 +308,10 @@ func BenchmarkFullRun(b *testing.B) {
 			// Unsure why I have to start with ithis nsert statement, but replication
 			// from GTID event id 1 won't pick up on the first 1 insert after a reset
 			// master for some reason
-			statementCount := 1000
-			execMysqlStatements(mysqlConn, generateBenchMysqlStatements(statementCount))
+			execMysqlStatements(mysqlConn, generateBenchMysqlStatements(batchSize))
 
 			go func() {
-				for app.Stats.DeliveredRows < uint64(statementCount)-1 {
+				for app.Stats.DeliveredRows < uint64(batchSize)-1 {
 					time.Sleep(200 * time.Millisecond)
 				}
 
@@ -319,6 +321,7 @@ func BenchmarkFullRun(b *testing.B) {
 				time.Sleep(100 * time.Millisecond)
 			}()
 
+			b.ResetTimer()
 			StartSync(app)
 		})
 	}
