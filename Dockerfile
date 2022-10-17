@@ -32,5 +32,7 @@ RUN rm -r /build
 FROM alpine as final
 COPY --from=dist /dist/main /dist/main
 
+RUN apk add --no-cache tzdata
+
 EXPOSE 3003
 ENTRYPOINT ["/dist/main"]
