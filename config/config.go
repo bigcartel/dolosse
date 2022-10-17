@@ -2,6 +2,7 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -51,11 +52,35 @@ func csvToRegexps(csv string) []*regexp.Regexp {
 func NewFromFlags(args []string) (Config, error) {
 	c := Config{}
 
-	fs := flag.NewFlagSet("MySQL -> Clickhouse binlog replicator", flag.ContinueOnError)
+	fs := flag.NewFlagSet("Dolosse", flag.ContinueOnError)
 	// TODO add description talking about assumption and limitations.
 	// Requires row based replication is enabled.
 	// Assumes tables have an id primary key column which is used
 	// to deduplicate on data dump.
+	fs.Usage = func() {
+		fmt.Print(`
+  ____   ___  _     ___  ____ ____  _____
+ |  _ \ / _ \| |   / _ \/ ___/ ___|| ____|
+ | | | | | | | |  | | | \___ \___ \|  _|
+ | |_| | |_| | |__| |_| |___) |__) | |___
+ |____/ \___/|_____\___/|____/____/|_____|
+
+Simple and efficient mysql binlog to clickhouse replication.
+
+Dolosse supports:
+- Parsing columns containing YAML and converting them to JSON
+- Stably hashing fields of sensitive user data to anonymize it (even nested within YAML columns) while still providing a means for querying that data.
+- Only replicating the mysql columns that are also present in the destination clickhouse table and deduplicating row data. Any events which would result in a duplicate given the subset of columns in the destination table will be ignored.
+- Pulling the maximum amount of binlog data available, and dumping only data not already present in the binlog.
+- Deduplicating binlog data such that you can rewind the syncer or re-run a database dump at any time without fear of writing duplicate data.
+
+All flags can also be specified as environment variables.
+--clickhouse-db=test becomes DOLOSSE_CLICKHOUSE_DB=test
+
+Flags:
+`)
+		fs.PrintDefaults()
+	}
 
 	var _ = fs.String("config", "", "config file (optional)")
 	c.Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
@@ -63,14 +88,14 @@ func NewFromFlags(args []string) (Config, error) {
 	c.Rewind = fs.Bool("rewind", false, "Reset stored binlog position and start replication from earliest available binlog event")
 	c.RunProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 	c.StartFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
-	c.MysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump (also available via MYSQL_DB")
-	c.MysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db (also via MYSQL_ADDR)")
-	c.MysqlUser = fs.String("mysql-user", "metabase", "mysql user (also via MYSQL_USER)")
-	c.MysqlPassword = fs.String("mysql-password", "", "mysql password (also via MYSQL_PASSWORD)")
-	c.ClickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db (also via CLICKHOUSE_ADDR)")
-	c.ClickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to (also available via CLICKHOUSE_DB)")
-	c.ClickhouseUsername = fs.String("clickhouse-username", "default", "Clickhouse username (also via CLICKHOUSE_USERNAME)")
-	c.ClickhousePassword = fs.String("clickhouse-password", "", "Clickhouse password (also available via CLICKHOUSE_PASSWORD)")
+	c.MysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump")
+	c.MysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db")
+	c.MysqlUser = fs.String("mysql-user", "metabase", "mysql user")
+	c.MysqlPassword = fs.String("mysql-password", "", "mysql password")
+	c.ClickhouseAddr = fs.String("clickhouse-addr", "10.100.0.56:9000", "ip/url and port for destination clickhouse db")
+	c.ClickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to")
+	c.ClickhouseUsername = fs.String("clickhouse-username", "default", "Clickhouse username")
+	c.ClickhousePassword = fs.String("clickhouse-password", "", "Clickhouse password")
 	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Second, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
 	c.BatchSize = fs.Int("batch-size", 200000,
 		"Threshold of records needed to trigger batch write. Batch write will happen when either batch-write-interval since last batch write is exceeded, or this threshold is hit.")
@@ -85,8 +110,7 @@ func NewFromFlags(args []string) (Config, error) {
 		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
 
 	err := ff.Parse(fs, args,
-		ff.WithConfigFileFlag("config"),
-		ff.WithConfigFileParser(ff.PlainParser),
+		ff.WithEnvVarPrefix("DOLOSSE"),
 	)
 
 	c.DumpTables = make(map[string]bool)
