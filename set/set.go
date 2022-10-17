@@ -1,4 +1,4 @@
-package main
+package set
 
 type Set[T comparable] map[T]struct{}
 

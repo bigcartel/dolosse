@@ -1,10 +1,12 @@
-package main
+package mysql
 
 import (
 	"bytes"
 	"math/rand"
 	"sync/atomic"
 	"time"
+
+	"bigcartel/dolosse/err_utils"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -13,7 +15,7 @@ import (
 	"github.com/pkg/errors"
 )
 
-var replicationDelay = atomic.Uint32{}
+var ReplicationDelay = atomic.Uint32{}
 
 // TODO - if I have the event time in events do I really need to store this globally?
 func updateReplicationDelay(eventTime uint32) {
@@ -23,18 +25,18 @@ func updateReplicationDelay(eventTime uint32) {
 	if now >= eventTime {
 		newDelay = now - eventTime
 	}
-	replicationDelay.Store(newDelay)
+	ReplicationDelay.Store(newDelay)
 }
 
 type PerSecondEventCountMap = map[uint64]uint32
 
-func startReplication(gtidSet mysql.GTIDSet) error {
+func (my *Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error {
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:         uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
 		HeartbeatPeriod:  60 * time.Second,
-		Host:             *Config.MysqlAddr,
-		User:             *Config.MysqlUser,
-		Password:         *Config.MysqlPassword,
+		Host:             my.cfg.Address,
+		User:             my.cfg.User,
+		Password:         my.cfg.Password,
 		Flavor:           "mysql",
 		DisableRetrySync: true,
 		RawModeEnabled:   true,
@@ -51,9 +53,9 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 	syncer := replication.NewBinlogSyncer(cfg)
 
 	streamer, err := syncer.StartSyncGTID(gtidSet)
-	must(err)
+	err_utils.Must(err)
 
-	return withMysqlConnection(func(conn *client.Conn) error {
+	return withMysqlConnection(my, func(conn *client.Conn) error {
 		var action string
 		var serverUuid string
 		var EventTransactionEventNumber uint32
@@ -62,7 +64,7 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 		var txnCommitTime time.Time
 
 		for {
-			rawEv, err := streamer.GetEvent(State.ctx)
+			rawEv, err := streamer.GetEvent(my.Ctx)
 			if err != nil {
 				return err
 			}
@@ -117,14 +119,14 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 					serverUuid = sid.String()
 				}
 			case *replication.RowsEvent:
-				if !bytes.Equal(e.Table.Schema, Config.MysqlDbByte) {
+				if !bytes.Equal(e.Table.Schema, my.dbNameByte) {
 					continue
 				}
 
 				// TODO make cachedChColumnsForTable support []byte so it doesn't need extra allocations
 				// or is there a faster way to check this to make skipping less expensive?
 				// is this even expensive?
-				_, hasColumns := State.chColumns.ColumnsForTable(string(e.Table.Table))
+				_, hasColumns := my.ChColumns.ColumnsForTable(string(e.Table.Table))
 				if !hasColumns {
 					continue
 				}
@@ -138,7 +140,7 @@ func startReplication(gtidSet mysql.GTIDSet) error {
 					action = UpdateAction
 				}
 
-				table := getMysqlTable(string(e.Table.Schema), string(e.Table.Table))
+				table := my.GetMysqlTable(string(e.Table.Schema), string(e.Table.Table))
 
 				rowE := MysqlReplicationRowEvent{
 					Table:                  table,

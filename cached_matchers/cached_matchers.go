@@ -1,15 +1,16 @@
-package main
+package cached_matchers
 
 import (
+	"bigcartel/dolosse/concurrent_map"
 	"regexp"
 )
 
 type CachedMatchers struct {
-	ConcurrentMap[ConcurrentMap[bool]]
+	concurrent_map.ConcurrentMap[concurrent_map.ConcurrentMap[bool]]
 }
 
 func NewCachedMatchers() CachedMatchers {
-	return CachedMatchers{NewConcurrentMap[ConcurrentMap[bool]]()}
+	return CachedMatchers{concurrent_map.NewConcurrentMap[concurrent_map.ConcurrentMap[bool]]()}
 }
 
 func (c *CachedMatchers) cachedMatchAny(v, regexpMatchString string, callback func(string) bool) bool {
@@ -22,7 +23,7 @@ func (c *CachedMatchers) cachedMatchAny(v, regexpMatchString string, callback fu
 			return *cachedMatch
 		}
 	} else {
-		newCache := NewConcurrentMap[bool]()
+		newCache := concurrent_map.NewConcurrentMap[bool]()
 		matcherCache = &newCache
 		c.Set(regexpMatchString, &newCache)
 	}

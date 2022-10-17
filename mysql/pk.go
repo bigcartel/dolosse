@@ -1,4 +1,4 @@
-package main
+package mysql
 
 import (
 	"github.com/siddontang/go-log/log"
