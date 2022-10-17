@@ -30,16 +30,16 @@ type ClickhouseBatchRow struct {
 type App struct {
 	Ctx             context.Context
 	Shutdown        context.CancelFunc
-	Mysql           *mysql.Mysql
-	ProcessRows     chan *mysql.MysqlReplicationRowEvent
-	BatchWrite      chan *mysql.MysqlReplicationRowEvent
+	Mysql           mysql.Mysql
+	ProcessRows     chan mysql.MysqlReplicationRowEvent
+	BatchWrite      chan mysql.MysqlReplicationRowEvent
 	EventTranslator mysql.EventTranslator
-	Stats           Stats
+	Stats           *Stats
 	Config          config.Config
 	ChColumns       *cached_columns.ChColumns
 }
 
-func (app *App) processEventWorker() {
+func (app App) processEventWorker() {
 	for {
 		select {
 		case <-app.Ctx.Done():
@@ -52,7 +52,7 @@ func (app *App) processEventWorker() {
 				continue
 			}
 
-			isDup := app.EventTranslator.PopulateInsertData(event, columns)
+			isDup := app.EventTranslator.PopulateInsertData(&event, columns)
 
 			if isDup {
 				app.Stats.IncrementSkippedRowLevelDuplicates()
@@ -65,18 +65,18 @@ func (app *App) processEventWorker() {
 	}
 }
 
-func (app *App) startProcessEventsWorkers() {
+func (app App) startProcessEventsWorkers() {
 	for i := 0; i < runtime.NumCPU(); i++ {
 		go app.processEventWorker()
 	}
 }
 
-func (app *App) OnRow(e *mysql.MysqlReplicationRowEvent) {
+func (app App) OnRow(e mysql.MysqlReplicationRowEvent) {
 	app.ProcessRows <- e
 	app.Stats.IncrementEnqueued()
 }
 
-func (app *App) tableWithDb(table string) string {
+func (app App) tableWithDb(table string) string {
 	return fmt.Sprintf("%s.%s", *app.Config.ClickhouseDb, table)
 }
 
@@ -84,7 +84,7 @@ func logNoRows(table string) {
 	log.Infoln("no rows to send for", table, "skipping...")
 }
 
-func (app *App) deliverBatchForTable(clickhouseDb clickhouse.ClickhouseDb, table string, rows *[]*mysql.MysqlReplicationRowEvent) {
+func (app App) deliverBatchForTable(clickhouseDb clickhouse.ClickhouseDb, table string, rows []mysql.MysqlReplicationRowEvent) {
 	columns, hasColumns := app.ChColumns.ColumnsForTable(table)
 
 	if !hasColumns {
@@ -92,7 +92,7 @@ func (app *App) deliverBatchForTable(clickhouseDb clickhouse.ClickhouseDb, table
 		return
 	}
 
-	if len(*rows) == 0 {
+	if len(rows) == 0 {
 		logNoRows(table)
 		return
 	}
@@ -113,7 +113,7 @@ func (app *App) deliverBatchForTable(clickhouseDb clickhouse.ClickhouseDb, table
 	log.Infof("batch sent for %s.%s", *app.Config.MysqlDb, table)
 }
 
-func (app *App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, table string, processedRows *[]*mysql.MysqlReplicationRowEvent, chColumns []cached_columns.ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+func (app App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, table string, processedRows []mysql.MysqlReplicationRowEvent, chColumns []cached_columns.ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
 	minMaxValues := mysql.GetMinMaxValues(processedRows)
 
 	tableWithDb := app.tableWithDb(table)
@@ -132,7 +132,7 @@ func (app *App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, t
 	batchColumnArrays := make(ClickhouseBatchColumns, len(chColumns))
 	writeCount := 0
 
-	for _, event := range *processedRows {
+	for _, event := range processedRows {
 		if event.Action == "dump" && hasStoredIds && storedPksMap.Contains(event.PkString()) {
 			app.Stats.IncrementSkippedDumpDuplicates()
 			continue
@@ -156,7 +156,7 @@ func (app *App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, t
 
 		for i, col := range chColumns {
 			val := event.InsertData[col.Name]
-			newColumnAry, err := reflect_utils.ReflectAppend(col.Type, batchColumnArrays[i], val, len(*processedRows))
+			newColumnAry, err := reflect_utils.ReflectAppend(col.Type, batchColumnArrays[i], val, len(processedRows))
 
 			if err != nil {
 				log.Infoln(err)
@@ -186,7 +186,7 @@ func commaSeparatedColumnNames(columns []cached_columns.ClickhouseQueryColumn) s
 	return columnNames
 }
 
-func (app *App) sendClickhouseBatch(clickhouseDb clickhouse.ClickhouseDb, table string, batchColumnArrays ClickhouseBatchColumns, chColumns []cached_columns.ClickhouseQueryColumn) {
+func (app App) sendClickhouseBatch(clickhouseDb clickhouse.ClickhouseDb, table string, batchColumnArrays ClickhouseBatchColumns, chColumns []cached_columns.ClickhouseQueryColumn) {
 	tableWithDb := app.tableWithDb(table)
 
 	batch := err_utils.Unwrap(clickhouseDb.Conn.PrepareBatch(context.Background(),
@@ -205,18 +205,18 @@ func (app *App) sendClickhouseBatch(clickhouseDb clickhouse.ClickhouseDb, table 
 	}
 }
 
-type EventsByTable map[string]*[]*mysql.MysqlReplicationRowEvent
+type EventsByTable map[string][]mysql.MysqlReplicationRowEvent
 
 func (es *EventsByTable) Reset(recycleSlices bool) {
 	if recycleSlices {
 		for k, vSlice := range *es {
-			newSlice := (*vSlice)[:0]
-			(*es)[k] = &newSlice
+			newSlice := (vSlice)[:0]
+			(*es)[k] = newSlice
 		}
 	}
 }
 
-func (app *App) ClickhouseConn() clickhouse.ClickhouseDb {
+func (app App) ClickhouseConn() clickhouse.ClickhouseDb {
 	return err_utils.Unwrap(clickhouse.EstablishClickhouseConnection(
 		app.Ctx,
 		clickhouse.Config{
@@ -227,7 +227,7 @@ func (app *App) ClickhouseConn() clickhouse.ClickhouseDb {
 		}))
 }
 
-func (app *App) batchWrite() {
+func (app App) batchWrite() {
 	clickhouseDb := app.ClickhouseConn()
 
 	eventsByTable := make(EventsByTable)
@@ -288,12 +288,12 @@ func (app *App) batchWrite() {
 			if eventsByTable[e.Table.Name] == nil {
 				// saves some memory if a given table doesn't have large batch sizes
 				// - since this slice is re-used any growth that happens only happens once
-				eventSlice := make([]*mysql.MysqlReplicationRowEvent, 0, *app.Config.BatchSize/20)
-				eventsByTable[e.Table.Name] = &eventSlice
+				eventSlice := make([]mysql.MysqlReplicationRowEvent, 0, *app.Config.BatchSize/20)
+				eventsByTable[e.Table.Name] = eventSlice
 			}
 
-			events := append(*eventsByTable[e.Table.Name], e)
-			eventsByTable[e.Table.Name] = &events
+			events := append(eventsByTable[e.Table.Name], e)
+			eventsByTable[e.Table.Name] = events
 
 			if eventsInBatchCount == *app.Config.BatchSize {
 				deliver()
@@ -304,7 +304,7 @@ func (app *App) batchWrite() {
 	}
 }
 
-func (app *App) deliverBatch(clickhouseDb clickhouse.ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
+func (app App) deliverBatch(clickhouseDb clickhouse.ClickhouseDb, eventsByTable EventsByTable, lastGtidSet string) {
 	app.ChColumns.Sync(&clickhouseDb, app.Mysql)
 
 	var wg sync.WaitGroup
@@ -318,7 +318,7 @@ func (app *App) deliverBatch(clickhouseDb clickhouse.ClickhouseDb, eventsByTable
 
 		wg.Add(1)
 
-		go func(table string, rows *[]*mysql.MysqlReplicationRowEvent) {
+		go func(table string, rows []mysql.MysqlReplicationRowEvent) {
 			working <- true
 			app.deliverBatchForTable(clickhouseDb, table, rows)
 			<-working
@@ -334,7 +334,7 @@ func (app *App) deliverBatch(clickhouseDb clickhouse.ClickhouseDb, eventsByTable
 }
 
 // TODO rename to InitSchema
-func (app *App) InitState(testing bool) {
+func (app App) InitState(testing bool) {
 	clickhouseDb := app.ClickhouseConn()
 	clickhouseDb.Setup()
 
@@ -346,7 +346,7 @@ func (app *App) InitState(testing bool) {
 	app.ChColumns.Sync(&clickhouseDb, app.Mysql)
 }
 
-func (app *App) StartSync() {
+func (app App) StartSync() {
 	app.startProcessEventsWorkers()
 	go app.batchWrite()
 
@@ -412,19 +412,20 @@ func NewApp(testing bool, flags []string) App {
 	})
 
 	return App{
-		Ctx:         ctx,
-		Shutdown:    cancel,
-		Mysql:       &my,
-		Stats:       NewStats(testing),
-		Config:      config,
-		ProcessRows: make(chan *mysql.MysqlReplicationRowEvent, (*config.BatchSize)*2),
-		BatchWrite:  make(chan *mysql.MysqlReplicationRowEvent, (*config.BatchSize)*2),
+		Ctx:      ctx,
+		Shutdown: cancel,
+		Mysql:    my,
+		Stats:    NewStats(testing),
+		Config:   config,
+		// chan of structs that aren't references take more space - but I think perf wise
+		// they're basically allocated once and then that's it.
+		ProcessRows: make(chan mysql.MysqlReplicationRowEvent, (*config.BatchSize)*2),
+		BatchWrite:  make(chan mysql.MysqlReplicationRowEvent, (*config.BatchSize)*2),
 		EventTranslator: mysql.NewEventTranslator(mysql.EventTranslatorConfig{
 			AnonymizeFields:                config.AnonymizeFields,
 			IgnoredColumnsForDeduplication: config.IgnoredColumnsForDeduplication,
 			YamlColumns:                    config.YamlColumns,
 		}),
-
 		ChColumns: chColumns,
 	}
 }

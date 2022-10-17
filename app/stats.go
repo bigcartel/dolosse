@@ -37,8 +37,8 @@ func newPrometheusCounter(name, description string, testing bool) *prometheus.Co
 	return &counter
 }
 
-func NewStats(testing bool) Stats {
-	return Stats{
+func NewStats(testing bool) *Stats {
+	return &Stats{
 		promDeliveredRows:              *newPrometheusCounter("delivered_rows", "Total number of rows delivered to clickhouse", testing),
 		promEnqueuedRows:               *newPrometheusCounter("enqueued_rows", "Total number of rows enqueued for processing", testing),
 		promProcessedRows:              *newPrometheusCounter("processed_rows", "Total number of rows parsed (processed)", testing),

@@ -22,7 +22,7 @@ import (
 type Mysql struct {
 	Ctx           context.Context
 	Pool          *client.Pool
-	InitiatedDump atomic.Bool
+	InitiatedDump *atomic.Bool
 	dbNameByte    []byte
 	cfg           Config
 	mysqlColumns  concurrent_map.ConcurrentMap[*schema.Table]
@@ -43,15 +43,16 @@ func InitMysql(ctx context.Context, cachedColumns *cached_columns.ChColumns, cfg
 	return Mysql{
 		Ctx:           ctx,
 		Pool:          client.NewPool(log.Debugf, 10, 20, 5, cfg.Address, cfg.User, cfg.Password, cfg.DbName),
-		cfg:           cfg,
+		InitiatedDump: &atomic.Bool{},
 		dbNameByte:    []byte(cfg.DbName),
+		cfg:           cfg,
 		dumpingTables: concurrent_map.NewConcurrentMap[struct{}](),
 		mysqlColumns:  concurrent_map.NewConcurrentMap[*schema.Table](),
 		ChColumns:     cachedColumns,
 	}
 }
 
-func (db *Mysql) GetEarliestGtidStartPoint() string {
+func (db Mysql) GetEarliestGtidStartPoint() string {
 	return withMysqlConnection(db, func(conn *client.Conn) string {
 		gtidString := db.GetMysqlVariable(conn, "@@GLOBAL.gtid_purged")
 
@@ -64,14 +65,14 @@ func (db *Mysql) GetEarliestGtidStartPoint() string {
 	})
 }
 
-func (db *Mysql) GetMysqlVariable(conn *client.Conn, variable string) string {
+func (db Mysql) GetMysqlVariable(conn *client.Conn, variable string) string {
 	rr, err := conn.Execute("select " + variable)
 	err_utils.Must(err)
 
 	return string(rr.Values[0][0].AsString())
 }
 
-func (db *Mysql) GetMysqlTableNames() []string {
+func (db Mysql) GetMysqlTableNames() []string {
 	return withMysqlConnection(db, func(conn *client.Conn) []string {
 		rr, err := conn.Execute(fmt.Sprintf("SHOW TABLES FROM %s", db.cfg.DbName))
 		if err != nil {
@@ -90,7 +91,7 @@ func (db *Mysql) GetMysqlTableNames() []string {
 // TODO could I use this same method for getting clickhouse tables?
 // lazy load instead of doing a scheduled load at a particular time?
 // TODO this needs to be reset as well on alter tables
-func (db *Mysql) GetMysqlTable(dbName, table string) *schema.Table {
+func (db Mysql) GetMysqlTable(dbName, table string) *schema.Table {
 	v := db.mysqlColumns.Get(table)
 
 	if v != nil {
@@ -105,20 +106,20 @@ func (db *Mysql) GetMysqlTable(dbName, table string) *schema.Table {
 	}
 }
 
-func withMysqlConnection[T any](db *Mysql, f func(c *client.Conn) T) T {
+func withMysqlConnection[T any](db Mysql, f func(c *client.Conn) T) T {
 	conn := err_utils.Unwrap(db.Pool.GetConn(db.Ctx))
 	defer db.Pool.PutConn(conn)
 	return f(conn)
 }
 
-type RowHandler func(*MysqlReplicationRowEvent)
+type RowHandler func(MysqlReplicationRowEvent)
 
 type tableDumpedStatusManager interface {
 	SetTableDumped(string, bool)
 	GetTableDumped(string) bool
 }
 
-func (db *Mysql) DumpMysqlDb(dtm tableDumpedStatusManager, forceDump bool, onRow RowHandler) {
+func (db Mysql) DumpMysqlDb(dtm tableDumpedStatusManager, forceDump bool, onRow RowHandler) {
 	var wg sync.WaitGroup
 	working := make(chan bool, db.cfg.ConcurrentDumpQueries)
 	db.ChColumns.M.Range(func(k, _ any) bool {
@@ -156,7 +157,7 @@ func copyDumpStringValues(val *mysql.FieldValue) interface{} {
 	}
 }
 
-func (db *Mysql) dumpTable(dbName, tableName string, onRow func(*MysqlReplicationRowEvent)) error {
+func (db Mysql) dumpTable(dbName, tableName string, onRow func(MysqlReplicationRowEvent)) error {
 	return withMysqlConnection(db, func(conn *client.Conn) error {
 		var result mysql.Result
 		var i uint64 = 1
@@ -168,7 +169,7 @@ func (db *Mysql) dumpTable(dbName, tableName string, onRow func(*MysqlReplicatio
 			}
 
 			event := db.processDumpData(dbName, tableName, i, values)
-			onRow(&event)
+			onRow(event)
 			i++
 
 			return nil
@@ -176,7 +177,7 @@ func (db *Mysql) dumpTable(dbName, tableName string, onRow func(*MysqlReplicatio
 	})
 }
 
-func (db *Mysql) processDumpData(dbName string, tableName string, eventNumber uint64, values []interface{}) MysqlReplicationRowEvent {
+func (db Mysql) processDumpData(dbName string, tableName string, eventNumber uint64, values []interface{}) MysqlReplicationRowEvent {
 	_, hasColumns := db.ChColumns.ColumnsForTable(tableName)
 	if !hasColumns {
 		return MysqlReplicationRowEvent{}

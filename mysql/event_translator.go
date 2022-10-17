@@ -42,7 +42,7 @@ func NewEventTranslator(config EventTranslatorConfig) EventTranslator {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
-func (t *EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (IsDuplicate bool) {
+func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (IsDuplicate bool) {
 	insertData, isDuplicate := t.InsertDataFromRows(e, columns)
 
 	if isDuplicate {
@@ -62,7 +62,7 @@ func (t *EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, column
 	return false
 }
 
-func (t *EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool) {
+func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool) {
 	data = make(RowInsertData, len(columns.Columns))
 
 	var previousRow []interface{}
@@ -100,7 +100,7 @@ func (t *EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, column
 	return data, isDuplicate
 }
 
-func (t *EventTranslator) ParseValue(value interface{}, columnType int, tableName string, columnName string) interface{} {
+func (t EventTranslator) ParseValue(value interface{}, columnType int, tableName string, columnName string) interface{} {
 	value = t.convertMysqlColumnType(value, columnType)
 
 	switch v := value.(type) {
@@ -113,7 +113,7 @@ func (t *EventTranslator) ParseValue(value interface{}, columnType int, tableNam
 	}
 }
 
-func (t *EventTranslator) parseString(value string, tableName string, columnName string) interface{} {
+func (t EventTranslator) parseString(value string, tableName string, columnName string) interface{} {
 	var out interface{}
 
 	if t.isYamlColumn(tableName, columnName) {
@@ -146,7 +146,7 @@ func (t *EventTranslator) parseString(value string, tableName string, columnName
 // TODO should this be injected and be a convert function the translator is initiated with?
 const MysqlDateFormat = "2006-01-02"
 
-func (t *EventTranslator) convertMysqlColumnType(value interface{}, columnType int) interface{} {
+func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType int) interface{} {
 	if value == nil {
 		return value
 	}
@@ -183,19 +183,19 @@ func (t *EventTranslator) convertMysqlColumnType(value interface{}, columnType i
 	}
 }
 
-func (t *EventTranslator) isAnonymizedField(s string) bool {
+func (t EventTranslator) isAnonymizedField(s string) bool {
 	return t.memoizedRegexpsMatch(s, t.Config.AnonymizeFields)
 }
 
-func (t *EventTranslator) isYamlColumn(tableName string, columnName string) bool {
+func (t EventTranslator) isYamlColumn(tableName string, columnName string) bool {
 	return t.memoizedRegexpsMatch(t.fieldString(tableName, columnName), t.Config.YamlColumns)
 }
 
-func (t *EventTranslator) memoizedRegexpsMatch(s string, r []*regexp.Regexp) bool {
+func (t EventTranslator) memoizedRegexpsMatch(s string, r []*regexp.Regexp) bool {
 	return t.CachedMatchers.MemoizedRegexpsMatch(s, r)
 }
 
-func (t *EventTranslator) fieldString(table string, columnPath string) string {
+func (t EventTranslator) fieldString(table string, columnPath string) string {
 	b := strings.Builder{}
 	b.Grow(len(table) + len(columnPath) + 1)
 	b.WriteString(table)
@@ -204,7 +204,7 @@ func (t *EventTranslator) fieldString(table string, columnPath string) string {
 	return b.String()
 }
 
-func (t *EventTranslator) hashString(s []byte) string {
+func (t EventTranslator) hashString(s []byte) string {
 	return strconv.FormatUint(city.CH64(s), 10)
 }
 
@@ -218,7 +218,7 @@ func stripLeadingColon(s string) string {
 }
 
 // currently only supports strings
-func (t *EventTranslator) anonymizeValue(value interface{}, table string, columnPath string) interface{} {
+func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string) interface{} {
 	anonymize := t.isAnonymizedField(t.fieldString(table, columnPath))
 
 	switch v := value.(type) {
