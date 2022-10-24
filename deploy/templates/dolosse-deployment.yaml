@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-app
+  labels:
+{{ include "dolosse.deployment-labels" (list . "app") | indent 6 }}
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+{{ include "dolosse.deployment-labels" (list . "app") | indent 6 }}
+  template:
+    metadata:
+      labels:
+{{ include "dolosse.deployment-labels" (list . "app") | indent 8 }}
+    spec:
+      containers:
+        - name: app
+          image: {{ .Values.imageRepository }}:latest
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 4
+              memory: "2G"
+            limits:
+              memory: "3G"
+          envFrom:
+            - secretRef:
+                name: dolosse-secrets
+      imagePullSecrets:
+      - name: dockerhub
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-app
+  labels:
+    app.kubernetes.io/name: {{ .Release.Name }}-ports
+spec:
+  type: NodePort
+  ports:
+  - port: 3003
+    protocol: TCP
+    name: metrics
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}-app

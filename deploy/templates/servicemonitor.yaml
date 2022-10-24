@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+{{ include "dolosse.deployment-labels" (list . "app") | indent 6 }}
+  name: {{ .Release.Name }}
+spec:
+  endpoints:
+    - interval: 10s
+      path: /
+      port: metrics
+  jobLabel: app.kubernetes.io/name
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ .Release.Name }}-ports
