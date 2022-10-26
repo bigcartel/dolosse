@@ -191,7 +191,8 @@ func (db Mysql) processDumpData(dbName string, tableName string, eventNumber uin
 		Timestamp: time.Now(),
 		Action:    DumpAction,
 		// imperfect, but effective enough since when dumping rows are returned in a consistent order
-		TransactionId: eventNumber,
-		ServerId:      "dump",
+		TransactionId:          eventNumber,
+		TransactionEventNumber: 1,
+		ServerId:               "dump",
 	}
 }

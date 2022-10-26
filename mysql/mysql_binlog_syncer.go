@@ -119,6 +119,8 @@ func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error 
 					serverUuid = sid.String()
 				}
 			case *replication.RowsEvent:
+				EventTransactionEventNumber++
+
 				if !bytes.Equal(e.Table.Schema, my.dbNameByte) {
 					continue
 				}
@@ -153,7 +155,6 @@ func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error 
 				}
 
 				OnRow(rowE)
-				EventTransactionEventNumber++
 			}
 
 			updateReplicationDelay(ev.Header.Timestamp)
