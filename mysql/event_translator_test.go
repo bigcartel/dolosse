@@ -129,8 +129,9 @@ func TestParseBadYaml(t *testing.T) {
 
 func translator() EventTranslator {
 	cfg := EventTranslatorConfig{
-		AnonymizeFields: regexpSlice(".*(password|email|address).*"),
-		YamlColumns:     regexpSlice("test_table.yaml_column"),
+		AnonymizeFields:     regexpSlice(".*(password|email|address).*"),
+		SkipAnonymizeFields: regexpSlice(".*(password)_type$"),
+		YamlColumns:         regexpSlice("test_table.yaml_column"),
 	}
 
 	return NewEventTranslator(cfg)
@@ -209,6 +210,13 @@ func TestAnonymizeStringValue(t *testing.T) {
 	assert.NotEqual(t, out, password, "expected password string to be anonymized")
 }
 
+func TestSkipAnonymizeStringValue(t *testing.T) {
+	tr := translator()
+	password := "test"
+	out := tr.ParseValue(password, schema.TYPE_STRING, "some_table", "password_type").(string)
+	assert.Equal(t, out, password, "expected password string not to be anonymized")
+}
+
 func TestAnonymizeByteSlice(t *testing.T) {
 	tr := translator()
 	password := []byte("test")
@@ -252,10 +260,14 @@ func TestEventToClickhouseRowData(t *testing.T) {
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
-	isDuplicate := tr.PopulateInsertData(rowEvent, columns)
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(rowEvent, columns)
 
 	if isDuplicate {
 		t.Error("Expected row not to be flagged as duplicate")
+	}
+
+	if isColumnMismatch {
+		t.Error("Expected row not to be flagged as column mismatch")
 	}
 
 	if rowEvent.PkString() != "12" {
@@ -481,10 +493,14 @@ shipping:
 	rows = append(rows, []interface{}{12, yaml})
 	replicationRowEvent.Rows = rows
 
-	isDuplicate := tr.PopulateInsertData(replicationRowEvent, columns)
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(replicationRowEvent, columns)
 
 	if isDuplicate {
 		t.Error("Expected row not to be flagged as duplicate")
+	}
+
+	if isColumnMismatch {
+		t.Error("Expected row not to be flagged as column mismatch")
 	}
 
 	if replicationRowEvent.PkString() != "12" {

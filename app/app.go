@@ -52,10 +52,12 @@ func (app App) processEventWorker() {
 				continue
 			}
 
-			isDup := app.EventTranslator.PopulateInsertData(&event, columns)
+			isDup, isColumnMismatch := app.EventTranslator.PopulateInsertData(&event, columns)
 
 			if isDup {
 				app.Stats.IncrementSkippedRowLevelDuplicates()
+			} else if isColumnMismatch {
+				app.Stats.IncrementSkippedColumnMismatch()
 			} else {
 				app.BatchWrite <- event
 			}

@@ -29,6 +29,7 @@ type EventTranslator struct {
 
 type EventTranslatorConfig struct {
 	AnonymizeFields                []*regexp.Regexp
+	SkipAnonymizeFields            []*regexp.Regexp
 	IgnoredColumnsForDeduplication []*regexp.Regexp
 	YamlColumns                    []*regexp.Regexp
 }
@@ -42,11 +43,11 @@ func NewEventTranslator(config EventTranslatorConfig) EventTranslator {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
-func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (IsDuplicate bool) {
-	insertData, isDuplicate := t.InsertDataFromRows(e, columns)
+func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (isDuplicate bool, isColumnMismatch bool) {
+	insertData, isDuplicate, isColumnMismatch := t.InsertDataFromRows(e, columns)
 
 	if isDuplicate {
-		return true
+		return
 	}
 
 	e.Pks = e.buildPk(insertData)
@@ -59,10 +60,10 @@ func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns
 
 	e.InsertData = insertData
 
-	return false
+	return
 }
 
-func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool) {
+func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool, isColumnMismatch bool) {
 	data = make(RowInsertData, len(columns.Columns))
 
 	var previousRow []interface{}
@@ -76,6 +77,16 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns
 	}
 
 	row := e.Rows[newEventIdx]
+	// TODO would love if we could find a way to track schema changes over time but it
+	// just doesn't seem feasible.
+	if len(row) != len(e.Table.Columns) {
+		log.Errorln("Mismatch between event columns and schema table columns for table", e.Table.Name)
+		log.Errorf("row: %+v", row)
+		log.Errorf("table columns: %+v", e.Table.Columns)
+
+		isColumnMismatch = true
+		return
+	}
 
 	isDuplicate = false
 	if e.Action == "update" {
@@ -97,7 +108,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns
 		}
 	}
 
-	return data, isDuplicate
+	return
 }
 
 func (t EventTranslator) ParseValue(value interface{}, columnType int, tableName string, columnName string) interface{} {
@@ -183,6 +194,10 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType in
 	}
 }
 
+func (t EventTranslator) isSkippedAnonymizedField(s string) bool {
+	return t.memoizedRegexpsMatch(s, t.Config.SkipAnonymizeFields)
+}
+
 func (t EventTranslator) isAnonymizedField(s string) bool {
 	return t.memoizedRegexpsMatch(s, t.Config.AnonymizeFields)
 }
@@ -219,7 +234,8 @@ func stripLeadingColon(s string) string {
 
 // currently only supports strings
 func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string) interface{} {
-	anonymize := t.isAnonymizedField(t.fieldString(table, columnPath))
+	fieldString := t.fieldString(table, columnPath)
+	anonymize := !t.isSkippedAnonymizedField(fieldString) && t.isAnonymizedField(fieldString)
 
 	switch v := value.(type) {
 	case map[string]interface{}:

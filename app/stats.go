@@ -14,6 +14,7 @@ type Stats struct {
 	ProcessedRows,
 	SkippedRowLevelDuplicates,
 	SkippedPersistedDuplicates,
+	SkippedColumnMismatch,
 	SkippedDumpDuplicates uint64
 
 	promDeliveredRows,
@@ -21,6 +22,7 @@ type Stats struct {
 	promProcessedRows,
 	promSkippedRowLevelDuplicates,
 	promSkippedPersistedDuplicates,
+	promSkippedColumnMismatch,
 	promSkippedDumpDuplicates prometheus.Counter
 }
 
@@ -44,6 +46,7 @@ func NewStats(testing bool) *Stats {
 		promProcessedRows:              *newPrometheusCounter("processed_rows", "Total number of rows parsed (processed)", testing),
 		promSkippedRowLevelDuplicates:  *newPrometheusCounter("skipped_row_level_duplicates", "Total number of rows skipped because current and previous row don't differ with respect to the columns included in the clickhouse table", testing),
 		promSkippedPersistedDuplicates: *newPrometheusCounter("skipped_persisted_duplicates", "Total number of rows skipped because duplicates were found in clickhouse", testing),
+		promSkippedColumnMismatch:      *newPrometheusCounter("skipped_column_mismatch", "Total number of rows skipped due to event having different columns tham current mysql schema", testing),
 		promSkippedDumpDuplicates:      *newPrometheusCounter("skipped_dump_duplicates", "Total number of rows skipped during dump because rows with the same id already exist in clickhouse", testing),
 	}
 }
@@ -73,6 +76,11 @@ func (s *Stats) IncrementSkippedPersistedDuplicates() {
 	s.promSkippedPersistedDuplicates.Add(1)
 }
 
+func (s *Stats) IncrementSkippedColumnMismatch() {
+	s.incrementStat(&s.SkippedColumnMismatch)
+	s.promSkippedColumnMismatch.Add(1)
+}
+
 func (s *Stats) IncrementSkippedDumpDuplicates() {
 	s.incrementStat(&s.SkippedDumpDuplicates)
 	s.promSkippedDumpDuplicates.Add(1)
@@ -88,5 +96,6 @@ func (s Stats) Print() {
 	log.Infoln(s.DeliveredRows, "delivered rows")
 	log.Infoln(s.SkippedRowLevelDuplicates, "skipped row level duplicate rows")
 	log.Infoln(s.SkippedPersistedDuplicates, "skipped persisted duplicate rows")
+	log.Infoln(s.SkippedColumnMismatch, "skipped column mismatch rows")
 	log.Infoln(s.SkippedDumpDuplicates, "skipped dump duplicate rows")
 }

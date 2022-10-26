@@ -35,6 +35,7 @@ type Config struct {
 	DumpTables map[string]bool
 
 	AnonymizeFields,
+	SkipAnonymizeFields,
 	IgnoredColumnsForDeduplication,
 	// TODO specialize these with type aliases to avoid bugs
 	YamlColumns []*regexp.Regexp
@@ -107,8 +108,11 @@ Flags:
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
 		".*(address|street|secret|postal|line.|password|salt|email|longitude|latitude|given_name|surname|\\.exp_|receipt_).*,payment_methods.properties.*,payment_methods.*description.*",
-		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
+		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is '{tableName}.{fieldName}.{jsonFieldName}*'. ")
 
+	SkipAnonymizeFields := fs.String("skip-anonymize-fields",
+		".*\\..*_type$",
+		"Comma separated list of field name regexps to explicitly not anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is '{tableName}.{fieldName}.{jsonFieldName}*'. ")
 	err := ff.Parse(fs, args,
 		ff.WithEnvVarPrefix("DOLOSSE"),
 	)
@@ -121,6 +125,7 @@ Flags:
 	c.IgnoredColumnsForDeduplication = csvToRegexps(*IgnoredColumnsForDeduplication)
 	c.YamlColumns = csvToRegexps(*YamlColumns)
 	c.AnonymizeFields = csvToRegexps(*AnonymizeFields)
+	c.SkipAnonymizeFields = csvToRegexps(*SkipAnonymizeFields)
 
 	return c, err
 }
