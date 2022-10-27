@@ -423,6 +423,7 @@ func NewApp(testing bool, flags []string) App {
 			AnonymizeFields:                config.AnonymizeFields,
 			IgnoredColumnsForDeduplication: config.IgnoredColumnsForDeduplication,
 			YamlColumns:                    config.YamlColumns,
+			AssumeOnlyAppendedColumns:      *config.AssumeOnlyAppendedColumns,
 		}),
 		ChColumns: chColumns,
 	}

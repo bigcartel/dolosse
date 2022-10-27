@@ -103,6 +103,7 @@ type TestRow = struct {
 	Price           decimal.Decimal `ch:"price"`
 	Description     string          `ch:"description"`
 	ChangelogAction string          `ch:"changelog_action"`
+	Zerp            int32           `ch:"zerp"`
 }
 
 func getTestRows(t *testing.T, chDb clickhouse.ClickhouseDb, expectedRowCount int) []TestRow {
@@ -152,6 +153,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 		`CREATE TABLE test.test (
 				id Int32,
 				name String,
+				zerp Int32,
 				price Decimal(10, 2),
 				description Nullable(String),
 				created_at DateTime,
@@ -230,7 +232,7 @@ func TestReplicationAndDump(t *testing.T) {
 				2,
 				"replicated",
 				"1.77",
-				"replicated desc",
+				"replicated deszzzc",
 				NOW()
 			);
 			INSERT INTO test (id, name, price, description, created_at)
@@ -238,7 +240,7 @@ func TestReplicationAndDump(t *testing.T) {
 				3,
 				"replicated",
 				"1.77",
-				"replicated desc",
+				"replicated desfeeeec",
 				NOW()
 			);
 			INSERT INTO test (id, name, price, description, created_at)
@@ -246,8 +248,20 @@ func TestReplicationAndDump(t *testing.T) {
 				4,
 				"replicated",
 				"1.77",
-				"replicated desc",
+				"replicated asdf",
 				NOW()
+			);
+
+			alter table test add column zerp int;
+
+			INSERT INTO test (id, name, price, description, created_at, zerp)
+			VALUES (
+				5,
+				"zerped",
+				"10000.77",
+				"something else",
+				NOW(),
+				444
 			);
 		`)
 
@@ -255,16 +269,23 @@ func TestReplicationAndDump(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getChRows[TestRow](t, clickhouseConn, "select id, changelog_action from test.test order by id asc", 4)
+		r := getChRows[TestRow](t, clickhouseConn, "select id, changelog_action, zerp from test.test order by id asc", 5)
 
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
 		assert.Equal(t, "dump", r[0].ChangelogAction)
+		assert.Equal(t, int32(0), r[0].Zerp)
 		assert.Equal(t, int32(2), r[1].Id, "replicated id should match")
 		assert.Equal(t, "dump", r[1].ChangelogAction)
+		assert.Equal(t, int32(0), r[1].Zerp)
 		assert.Equal(t, int32(3), r[2].Id, "replicated id should match")
 		assert.Equal(t, "insert", r[2].ChangelogAction)
+		assert.Equal(t, int32(0), r[2].Zerp)
 		assert.Equal(t, int32(4), r[3].Id, "replicated id should match")
 		assert.Equal(t, "insert", r[3].ChangelogAction)
+		assert.Equal(t, int32(0), r[3].Zerp)
+		assert.Equal(t, int32(5), r[4].Id, "replicated id should match")
+		assert.Equal(t, "insert", r[4].ChangelogAction)
+		assert.Equal(t, int32(444), r[4].Zerp)
 
 		app.Shutdown()
 	})
@@ -277,7 +298,7 @@ func TestReplicationAndDump(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		// it doesn't write any new rows
-		getTestRows(t, clickhouseConn, 4)
+		getTestRows(t, clickhouseConn, 5)
 
 		app.Shutdown()
 		time.Sleep(100 * time.Millisecond)
