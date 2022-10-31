@@ -16,7 +16,6 @@ import (
 
 	"github.com/go-faster/city"
 	"github.com/go-mysql-org/go-mysql/mysql"
-	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/goccy/go-yaml"
 	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
@@ -29,8 +28,10 @@ type EventTranslator struct {
 
 type EventTranslatorConfig struct {
 	AnonymizeFields                []*regexp.Regexp
+	SkipAnonymizeFields            []*regexp.Regexp
 	IgnoredColumnsForDeduplication []*regexp.Regexp
 	YamlColumns                    []*regexp.Regexp
+	AssumeOnlyAppendedColumns      bool
 }
 
 func NewEventTranslator(config EventTranslatorConfig) EventTranslator {
@@ -42,11 +43,11 @@ func NewEventTranslator(config EventTranslatorConfig) EventTranslator {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
-func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (IsDuplicate bool) {
-	insertData, isDuplicate := t.InsertDataFromRows(e, columns)
+func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (isDuplicate bool, isColumnMismatch bool) {
+	insertData, isDuplicate, isColumnMismatch := t.InsertDataFromRows(e, columns)
 
 	if isDuplicate {
-		return true
+		return
 	}
 
 	e.Pks = e.buildPk(insertData)
@@ -59,11 +60,11 @@ func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns
 
 	e.InsertData = insertData
 
-	return false
+	return
 }
 
-func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool) {
-	data = make(RowInsertData, len(columns.Columns))
+func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColumns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool, isColumnMismatch bool) {
+	data = make(RowInsertData, len(chColumns.Columns))
 
 	var previousRow []interface{}
 	tableName := e.Table.Name
@@ -77,14 +78,30 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns
 
 	row := e.Rows[newEventIdx]
 
+	if len(e.EventColumnNames) == 0 && !t.Config.AssumeOnlyAppendedColumns && len(row) != len(e.Table.Columns) {
+		log.Errorln("Mismatch between event columns and schema table columns for table", e.Table.Name)
+		log.Errorf("row: %+v", row)
+		log.Errorf("table columns: %+v", e.Table.Columns)
+
+		isColumnMismatch = true
+		return
+	}
+
 	isDuplicate = false
 	if e.Action == "update" {
 		isDuplicate = true
 	}
 
-	for i, c := range e.Table.Columns {
-		columnName := c.Name
-		if columns.ColumnLookup[columnName] {
+	columnNames := e.ColumnNames()
+	maxRowIdx := len(row) - 1
+
+	for i, columnName := range columnNames {
+		if i > maxRowIdx {
+			log.Infof("More columns than row fields for row: %+v, column names: %+v", row, columnNames)
+			break
+		}
+
+		if chColumns.ColumnLookup[columnName] {
 			if isDuplicate &&
 				hasPreviousEvent &&
 				!t.memoizedRegexpsMatch(columnName, t.Config.IgnoredColumnsForDeduplication) &&
@@ -92,15 +109,15 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, columns
 				isDuplicate = false
 			}
 
-			convertedValue := t.ParseValue(row[i], c.Type, tableName, columnName)
-			data[c.Name] = convertedValue
+			convertedValue := t.ParseValue(row[i], e.EventColumnTypes[i], tableName, columnName)
+			data[columnName] = convertedValue
 		}
 	}
 
-	return data, isDuplicate
+	return
 }
 
-func (t EventTranslator) ParseValue(value interface{}, columnType int, tableName string, columnName string) interface{} {
+func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableName string, columnName string) interface{} {
 	value = t.convertMysqlColumnType(value, columnType)
 
 	switch v := value.(type) {
@@ -146,12 +163,13 @@ func (t EventTranslator) parseString(value string, tableName string, columnName 
 // TODO should this be injected and be a convert function the translator is initiated with?
 const MysqlDateFormat = "2006-01-02"
 
-func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType int) interface{} {
+func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType byte) interface{} {
 	if value == nil {
 		return value
 	}
 	switch columnType {
-	case schema.TYPE_DATETIME, schema.TYPE_TIMESTAMP:
+	case mysql.MYSQL_TYPE_TIMESTAMP, mysql.MYSQL_TYPE_DATETIME,
+		mysql.MYSQL_TYPE_TIMESTAMP2, mysql.MYSQL_TYPE_DATETIME2:
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
 			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
@@ -160,7 +178,7 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType in
 		} else {
 			return value
 		}
-	case schema.TYPE_DATE:
+	case mysql.MYSQL_TYPE_DATE:
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
 			vt, err := time.Parse(MysqlDateFormat, vs)
@@ -169,7 +187,7 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType in
 		} else {
 			return value
 		}
-	case schema.TYPE_DECIMAL:
+	case mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
 			val, err := decimal.NewFromString(vs)
@@ -181,6 +199,10 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType in
 	default:
 		return value
 	}
+}
+
+func (t EventTranslator) isSkippedAnonymizedField(s string) bool {
+	return t.memoizedRegexpsMatch(s, t.Config.SkipAnonymizeFields)
 }
 
 func (t EventTranslator) isAnonymizedField(s string) bool {
@@ -219,7 +241,8 @@ func stripLeadingColon(s string) string {
 
 // currently only supports strings
 func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string) interface{} {
-	anonymize := t.isAnonymizedField(t.fieldString(table, columnPath))
+	fieldString := t.fieldString(table, columnPath)
+	anonymize := !t.isSkippedAnonymizedField(fieldString) && t.isAnonymizedField(fieldString)
 
 	switch v := value.(type) {
 	case map[string]interface{}:

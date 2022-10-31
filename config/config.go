@@ -30,11 +30,13 @@ type Config struct {
 	DumpImmediately,
 	Dump,
 	Rewind,
+	AssumeOnlyAppendedColumns,
 	RunProfile *bool
 
 	DumpTables map[string]bool
 
 	AnonymizeFields,
+	SkipAnonymizeFields,
 	IgnoredColumnsForDeduplication,
 	// TODO specialize these with type aliases to avoid bugs
 	YamlColumns []*regexp.Regexp
@@ -74,6 +76,11 @@ Dolosse supports:
 - Pulling the maximum amount of binlog data available, and dumping only data not already present in the binlog.
 - Deduplicating binlog data such that you can rewind the syncer or re-run a database dump at any time without fear of writing duplicate data.
 
+You'll need to set binlog_format = 'ROW' for Dolosse to work.
+To have the most seamless handling of changes in schema over time it's recommended to also set binlog_row_metadata = 'FULL'.
+Dolosse will run fine with binlog_row_metadata = 'MINIMAL' but will fall back to assuming newly added columns are appended
+to the table, or skipping historical events on schema mismatch with --asume-only-append-columns=false.
+
 All flags can also be specified as environment variables.
 --clickhouse-db=test becomes DOLOSSE_CLICKHOUSE_DB=test
 
@@ -86,6 +93,8 @@ Flags:
 	c.Dump = fs.Bool("force-dump", false, "Reset stored binlog position and start mysql data dump after replication has caught up to present")
 	c.DumpImmediately = fs.Bool("force-immediate-dump", false, "Force full immediate data dump and reset stored binlog position")
 	c.Rewind = fs.Bool("rewind", false, "Reset stored binlog position and start replication from earliest available binlog event")
+	c.AssumeOnlyAppendedColumns = fs.Bool("assume-only-appended-columns", true, `Assume that any ALTER TABLE ADD COLUMN statements are appended to the end of the table.
+Meaning they don't use ADD COLUMN FIRST|BEFORE|AFTER. Only relevant if is not set to BINLOG_ROW_METADATA=FULL`)
 	c.RunProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 	c.StartFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
 	c.MysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump")
@@ -107,8 +116,11 @@ Flags:
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
 		".*(address|street|secret|postal|line.|password|salt|email|longitude|latitude|given_name|surname|\\.exp_|receipt_).*,payment_methods.properties.*,payment_methods.*description.*",
-		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is #{tableName}.#{fieldName}.#{jsonFieldName}*. ")
+		"Comma separated list of field name regexps to anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is '{tableName}.{fieldName}.{jsonFieldName}*'. ")
 
+	SkipAnonymizeFields := fs.String("skip-anonymize-fields",
+		".*\\..*_type$",
+		"Comma separated list of field name regexps to explicitly not anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is '{tableName}.{fieldName}.{jsonFieldName}*'. ")
 	err := ff.Parse(fs, args,
 		ff.WithEnvVarPrefix("DOLOSSE"),
 	)
@@ -121,6 +133,7 @@ Flags:
 	c.IgnoredColumnsForDeduplication = csvToRegexps(*IgnoredColumnsForDeduplication)
 	c.YamlColumns = csvToRegexps(*YamlColumns)
 	c.AnonymizeFields = csvToRegexps(*AnonymizeFields)
+	c.SkipAnonymizeFields = csvToRegexps(*SkipAnonymizeFields)
 
 	return c, err
 }

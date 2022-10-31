@@ -52,10 +52,12 @@ func (app App) processEventWorker() {
 				continue
 			}
 
-			isDup := app.EventTranslator.PopulateInsertData(&event, columns)
+			isDup, isColumnMismatch := app.EventTranslator.PopulateInsertData(&event, columns)
 
 			if isDup {
 				app.Stats.IncrementSkippedRowLevelDuplicates()
+			} else if isColumnMismatch {
+				app.Stats.IncrementSkippedColumnMismatch()
 			} else {
 				app.BatchWrite <- event
 			}
@@ -421,6 +423,7 @@ func NewApp(testing bool, flags []string) App {
 			AnonymizeFields:                config.AnonymizeFields,
 			IgnoredColumnsForDeduplication: config.IgnoredColumnsForDeduplication,
 			YamlColumns:                    config.YamlColumns,
+			AssumeOnlyAppendedColumns:      *config.AssumeOnlyAppendedColumns,
 		}),
 		ChColumns: chColumns,
 	}

@@ -177,6 +177,64 @@ func (db Mysql) dumpTable(dbName, tableName string, onRow func(MysqlReplicationR
 	})
 }
 
+// approximate translation of
+// https://github.com/go-mysql-org/go-mysql/blob/master/schema/schema.go#L23
+// to
+// https://github.com/go-mysql-org/go-mysql/blob/master/mysql/const.go#L102
+// The conversions we're most concerned with are the time and decimal types
+// otherwise approximate is fine because the values are already parsed into go types
+// by go-mysql
+func schemaTypeToMysqlType(schemaType int) (mysqlType byte) {
+	switch schemaType {
+	case schema.TYPE_NUMBER: // tinyint, smallint, int, bigint, year
+		return mysql.MYSQL_TYPE_DOUBLE
+	case schema.TYPE_FLOAT: // float, double
+		return mysql.MYSQL_TYPE_FLOAT
+	case schema.TYPE_ENUM: // enum
+		return mysql.MYSQL_TYPE_ENUM
+	case schema.TYPE_SET: // set
+		return mysql.MYSQL_TYPE_SET
+	case schema.TYPE_STRING: // char, varchar, etc.
+		return mysql.MYSQL_TYPE_VAR_STRING
+	case schema.TYPE_DATETIME: // datetime
+		return mysql.MYSQL_TYPE_DATETIME
+	case schema.TYPE_TIMESTAMP: // timestamp
+		return mysql.MYSQL_TYPE_TIMESTAMP
+	case schema.TYPE_DATE: // date
+		return mysql.MYSQL_TYPE_DATE
+	case schema.TYPE_TIME: // time
+		return mysql.MYSQL_TYPE_TIME
+	case schema.TYPE_BIT: // bit
+		return mysql.MYSQL_TYPE_BIT
+	case schema.TYPE_JSON: // json
+		return mysql.MYSQL_TYPE_JSON
+	case schema.TYPE_DECIMAL: // decimal
+		return mysql.MYSQL_TYPE_DECIMAL
+	case schema.TYPE_MEDIUM_INT:
+		return mysql.MYSQL_TYPE_INT24
+	case schema.TYPE_BINARY: // binary, varbinary
+		return mysql.MYSQL_TYPE_VAR_STRING
+	case schema.TYPE_POINT: // coordinates
+		return mysql.MYSQL_TYPE_BLOB
+	default:
+		return mysql.MYSQL_TYPE_BLOB
+	}
+}
+
+// returns a slice of string column names and a slice of types of MYSQL_TYPE_* as defined in
+// go-mysql/mysql/const.go
+func namesAndMysqlTypesFromTable(t *schema.Table) (names []string, types []byte) {
+	types = make([]byte, len(t.Columns))
+	names = make([]string, len(t.Columns))
+
+	for i, c := range t.Columns {
+		names[i] = c.Name
+		types[i] = schemaTypeToMysqlType(c.Type)
+	}
+
+	return
+}
+
 func (db Mysql) processDumpData(dbName string, tableName string, eventNumber uint64, values []interface{}) MysqlReplicationRowEvent {
 	_, hasColumns := db.ChColumns.ColumnsForTable(tableName)
 	if !hasColumns {
@@ -184,14 +242,18 @@ func (db Mysql) processDumpData(dbName string, tableName string, eventNumber uin
 	}
 
 	tableInfo := db.GetMysqlTable(dbName, tableName)
+	names, types := namesAndMysqlTypesFromTable(tableInfo)
 
 	return MysqlReplicationRowEvent{
-		Table:     tableInfo,
-		Rows:      [][]interface{}{values},
-		Timestamp: time.Now(),
-		Action:    DumpAction,
+		Table:            tableInfo,
+		EventColumnNames: names,
+		EventColumnTypes: types,
+		Rows:             [][]interface{}{values},
+		Timestamp:        time.Now(),
+		Action:           DumpAction,
 		// imperfect, but effective enough since when dumping rows are returned in a consistent order
-		TransactionId: eventNumber,
-		ServerId:      "dump",
+		TransactionId:          eventNumber,
+		TransactionEventNumber: 1,
+		ServerId:               "dump",
 	}
 }

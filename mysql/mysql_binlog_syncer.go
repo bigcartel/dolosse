@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"bigcartel/dolosse/err_utils"
+	"bigcartel/dolosse/zeroalloc"
 
 	"github.com/go-mysql-org/go-mysql/client"
 	"github.com/go-mysql-org/go-mysql/mysql"
@@ -25,6 +26,7 @@ func updateReplicationDelay(eventTime uint32) {
 	if now >= eventTime {
 		newDelay = now - eventTime
 	}
+
 	ReplicationDelay.Store(newDelay)
 }
 
@@ -46,9 +48,6 @@ func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error 
 	parser.SetFlavor("mysql")
 	parser.SetUseDecimal(false)
 	parser.SetParseTime(false)
-
-	// TODO experiment with raw mode and instantiating parser to only parse events of interest
-	// parser := replication.NewBinlogParser()
 
 	syncer := replication.NewBinlogSyncer(cfg)
 
@@ -119,6 +118,8 @@ func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error 
 					serverUuid = sid.String()
 				}
 			case *replication.RowsEvent:
+				EventTransactionEventNumber++
+
 				if !bytes.Equal(e.Table.Schema, my.dbNameByte) {
 					continue
 				}
@@ -150,10 +151,11 @@ func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error 
 					ServerId:               serverUuid,
 					TransactionEventNumber: EventTransactionEventNumber,
 					TransactionId:          eventTransactionId,
+					EventColumnTypes:       e.Table.ColumnType,
+					EventColumnNames:       zeroalloc.ByteSliceSliceToStringSlice(e.Table.ColumnName),
 				}
 
 				OnRow(rowE)
-				EventTransactionEventNumber++
 			}
 
 			updateReplicationDelay(ev.Header.Timestamp)

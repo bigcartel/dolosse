@@ -9,6 +9,7 @@ import (
 
 	"bigcartel/dolosse/clickhouse/cached_columns"
 
+	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
 	"github.com/goccy/go-yaml"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,8 @@ import (
 func makeRowEvent() *MysqlReplicationRowEvent {
 	replicationRowEvent := &MysqlReplicationRowEvent{}
 	replicationRowEvent.Action = "create"
+	replicationRowEvent.EventColumnNames = []string{"id", "name", "description"}
+	replicationRowEvent.EventColumnTypes = []byte{mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_VARCHAR, mysql.MYSQL_TYPE_BLOB}
 	table := schema.Table{Name: "test_table"}
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "id"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "name"})
@@ -118,7 +121,7 @@ func TestParseBadYaml(t *testing.T) {
 	}
 
 	tr := NewEventTranslator(cfg)
-	err := json.Unmarshal(tr.ParseValue(yaml, schema.TYPE_STRING, "order_transactions", "params").([]byte), &out)
+	err := json.Unmarshal(tr.ParseValue(yaml, mysql.MYSQL_TYPE_VARCHAR, "order_transactions", "params").([]byte), &out)
 
 	if err != nil {
 		t.Fatal(err)
@@ -129,8 +132,9 @@ func TestParseBadYaml(t *testing.T) {
 
 func translator() EventTranslator {
 	cfg := EventTranslatorConfig{
-		AnonymizeFields: regexpSlice(".*(password|email|address).*"),
-		YamlColumns:     regexpSlice("test_table.yaml_column"),
+		AnonymizeFields:     regexpSlice(".*(password|email|address).*"),
+		SkipAnonymizeFields: regexpSlice(".*(password)_type$"),
+		YamlColumns:         regexpSlice("test_table.yaml_column"),
 	}
 
 	return NewEventTranslator(cfg)
@@ -140,7 +144,7 @@ func TestParseValueUint8Array(t *testing.T) {
 	tr := translator()
 	outValue := "test string"
 	inValue := []uint8(outValue)
-	parsedValue := tr.ParseValue(inValue, schema.TYPE_STRING, "table", "column")
+	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_VARCHAR, "table", "column")
 	if outValue != parsedValue.(string) {
 		t.Fatalf("expected '%s' to be converted to string, got '%s'", inValue, parsedValue)
 	}
@@ -180,7 +184,7 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 		Firstname string `json:"firstname"`
 	}{}
 
-	err = json.Unmarshal(tr.ParseValue(string(yamlString), schema.TYPE_STRING, "test_table", "yaml_column").([]byte), &out)
+	err = json.Unmarshal(tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column").([]byte), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,14 +209,21 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 func TestAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	out := tr.ParseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password").(string)
 	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+}
+
+func TestSkipAnonymizeStringValue(t *testing.T) {
+	tr := translator()
+	password := "test"
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password_type").(string)
+	assert.Equal(t, out, password, "expected password string not to be anonymized")
 }
 
 func TestAnonymizeByteSlice(t *testing.T) {
 	tr := translator()
 	password := []byte("test")
-	out := tr.ParseValue(password, schema.TYPE_STRING, "some_table", "password").(string)
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password").(string)
 
 	assert.NotEqual(t, out, string(password), "expected password byte slice to be anonymized")
 }
@@ -235,7 +246,7 @@ func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
 	}
 
 	for n := 0; n < b.N; n++ {
-		tr.ParseValue(string(yamlString), schema.TYPE_STRING, "test_table", "yaml_column")
+		tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column")
 	}
 }
 
@@ -247,32 +258,66 @@ func BenchmarkIsAnonymizedField(b *testing.B) {
 	}
 }
 
-func TestEventToClickhouseRowData(t *testing.T) {
+func TestPopulateInsertData(t *testing.T) {
 	tr := translator()
 	columns := makeColumnSet()
 	rowEvent := makeRowEvent()
 
-	isDuplicate := tr.PopulateInsertData(rowEvent, columns)
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(rowEvent, columns)
 
-	if isDuplicate {
-		t.Error("Expected row not to be flagged as duplicate")
-	}
+	assert.False(t, isDuplicate)
+	assert.False(t, isColumnMismatch)
+	assert.Equal(t, "12", rowEvent.PkString())
+	assert.Equal(t, 12, rowEvent.InsertData["id"])
+	assert.Equal(t, "asdf", rowEvent.InsertData["name"])
+	assert.Equal(t, "pretty cool", rowEvent.InsertData["description"])
+}
 
-	if rowEvent.PkString() != "12" {
-		t.Errorf("Expected id to be 12, got %s", rowEvent.PkString())
-	}
+func TestPopulateInsertDataWithNoColumnNamesForOldEvents(t *testing.T) {
+	tr := translator()
+	ev := makeRowEvent()
+	ev.EventColumnNames = []string{}
+	columns := makeColumnSet()
 
-	if rowEvent.InsertData["id"] != 12 {
-		t.Errorf("Expected Event['id'] to be 12, got %d", rowEvent.InsertData["id"])
-	}
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(ev, columns)
+	assert.False(t, isDuplicate)
+	assert.False(t, isColumnMismatch)
+	assert.Equal(t, "12", ev.PkString())
+	assert.Equal(t, 12, ev.InsertData["id"])
+	assert.Equal(t, "asdf", ev.InsertData["name"])
+	assert.Equal(t, "pretty cool", ev.InsertData["description"])
+}
 
-	if rowEvent.InsertData["name"] != "asdf" {
-		t.Errorf("Expected Event['name'] to be asdf, got %s", rowEvent.InsertData["name"])
-	}
+func TestSkipIfAssumeOnlyAppendColumnsIsFalse(t *testing.T) {
+	tr := translator()
+	ev := makeRowEvent()
+	ev.Table.Columns = append(ev.Table.Columns,
+		schema.TableColumn{Name: "description2"})
+	ev.EventColumnNames = []string{}
+	columns := makeColumnSet()
 
-	if rowEvent.InsertData["description"] != "pretty cool" {
-		t.Errorf("Expected Event['description'] to be 'pretty cool', got %s", rowEvent.InsertData["description"])
-	}
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(ev, columns)
+	assert.False(t, isDuplicate)
+	assert.True(t, isColumnMismatch)
+	assert.Equal(t, nil, ev.InsertData["id"])
+}
+
+func TestPopulateInsertDataWithNewColumnsAndNoColumnNamesForOldEvents(t *testing.T) {
+	tr := translator()
+	tr.Config.AssumeOnlyAppendedColumns = true
+	ev := makeRowEvent()
+	ev.Table.Columns = append(ev.Table.Columns,
+		schema.TableColumn{Name: "description2"})
+	ev.EventColumnNames = []string{}
+	columns := makeColumnSet()
+
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(ev, columns)
+	assert.False(t, isDuplicate)
+	assert.False(t, isColumnMismatch)
+	assert.Equal(t, "12", ev.PkString())
+	assert.Equal(t, 12, ev.InsertData["id"])
+	assert.Equal(t, "asdf", ev.InsertData["name"])
+	assert.Equal(t, "pretty cool", ev.InsertData["description"])
 }
 
 func TestEventWithYaml(t *testing.T) {
@@ -471,6 +516,8 @@ shipping:
 
 	replicationRowEvent := &MysqlReplicationRowEvent{}
 	replicationRowEvent.Action = "create"
+	replicationRowEvent.EventColumnNames = []string{"id", "yaml_column"}
+	replicationRowEvent.EventColumnTypes = []byte{mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_BLOB}
 	table := schema.Table{Name: "test_table"}
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "id"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "yaml_column"})
@@ -481,10 +528,14 @@ shipping:
 	rows = append(rows, []interface{}{12, yaml})
 	replicationRowEvent.Rows = rows
 
-	isDuplicate := tr.PopulateInsertData(replicationRowEvent, columns)
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(replicationRowEvent, columns)
 
 	if isDuplicate {
 		t.Error("Expected row not to be flagged as duplicate")
+	}
+
+	if isColumnMismatch {
+		t.Error("Expected row not to be flagged as column mismatch")
 	}
 
 	if replicationRowEvent.PkString() != "12" {
