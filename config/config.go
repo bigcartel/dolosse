@@ -105,7 +105,7 @@ Meaning they don't use ADD COLUMN FIRST|BEFORE|AFTER. Only relevant if is not se
 	c.ClickhouseDb = fs.String("clickhouse-db", "mysql_bigcartel_binlog", "db to write binlog data to")
 	c.ClickhouseUsername = fs.String("clickhouse-username", "default", "Clickhouse username")
 	c.ClickhousePassword = fs.String("clickhouse-password", "", "Clickhouse password")
-	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Second, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
+	c.BatchWriteInterval = fs.Duration("batch-write-interval", 10*time.Minute, "Interval of batch writes (valid values - 1m, 10s, 500ms, etc...)")
 	c.BatchSize = fs.Int("batch-size", 200000,
 		"Threshold of records needed to trigger batch write. Batch write will happen when either batch-write-interval since last batch write is exceeded, or this threshold is hit.")
 	c.ConcurrentBatchWrites = fs.Int("concurrent-batch-writes", 10, "Number of batch writes of different tables to clickhouse to run in parallel")
