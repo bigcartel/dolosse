@@ -19,17 +19,19 @@ import (
 func makeRowEvent() *MysqlReplicationRowEvent {
 	replicationRowEvent := &MysqlReplicationRowEvent{}
 	replicationRowEvent.Action = "create"
-	replicationRowEvent.EventColumnNames = []string{"id", "name", "description"}
-	replicationRowEvent.EventColumnTypes = []byte{mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_VARCHAR, mysql.MYSQL_TYPE_BLOB}
+	replicationRowEvent.EventColumnNames = []string{"id", "name", "description", "updated_at"}
+	replicationRowEvent.EventColumnTypes = []byte{mysql.MYSQL_TYPE_LONG, mysql.MYSQL_TYPE_VARCHAR, mysql.MYSQL_TYPE_BLOB, mysql.MYSQL_TYPE_VARCHAR}
 	table := schema.Table{Name: "test_table"}
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "id"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "name"})
 	table.Columns = append(table.Columns, schema.TableColumn{Name: "description"})
+	table.Columns = append(table.Columns, schema.TableColumn{Name: "updated_at"})
 	table.PKColumns = []int{0}
 	replicationRowEvent.Table = &table
-	rows := make([][]interface{}, 0)
-	rows = append(rows, []interface{}{12, "asdfe", "cool"})
-	rows = append(rows, []interface{}{12, "asdf", "pretty cool"})
+	rows := [][]interface{}{
+		{12, "asdfe", "cool", "12-01-01"},
+		{12, "asdf", "pretty cool", "12-01-01"},
+	}
 	replicationRowEvent.Rows = rows
 	return replicationRowEvent
 }
@@ -50,6 +52,10 @@ func makeColumnSet() *cached_columns.ChColumnSet {
 				Type: reflect.TypeOf(""),
 			},
 			{
+				Name: "updated_at",
+				Type: reflect.TypeOf(""),
+			},
+			{
 				Name: consts.EventUpdatedColumnsColumnName,
 				Type: reflect.TypeOf([]string{}),
 			},
@@ -58,6 +64,7 @@ func makeColumnSet() *cached_columns.ChColumnSet {
 			"id":                                 true,
 			"name":                               true,
 			"description":                        true,
+			"updated_at":                         true,
 			consts.EventUpdatedColumnsColumnName: true,
 		},
 	}
@@ -262,6 +269,23 @@ func BenchmarkIsAnonymizedField(b *testing.B) {
 	for n := 0; n < b.N; n++ {
 		tr.isAnonymizedField("email.yes")
 	}
+}
+
+func TestSkipIgnoredDeduplicationColumns(t *testing.T) {
+	tr := translator()
+	tr.Config.IgnoredColumnsForDeduplication = []*regexp.Regexp{regexp.MustCompile("updated_at")}
+	columns := makeColumnSet()
+	rowEvent := makeRowEvent()
+	rowEvent.Action = "update"
+	rowEvent.Rows = [][]interface{}{
+		{12, "asdf", "asdf", "12-01-01"},
+		{12, "asdf", "asdf", "12-01-02"},
+	}
+
+	isDuplicate, isColumnMismatch := tr.PopulateInsertData(rowEvent, columns)
+
+	assert.True(t, isDuplicate)
+	assert.False(t, isColumnMismatch)
 }
 
 func TestPopulateInsertData(t *testing.T) {

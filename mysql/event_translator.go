@@ -104,7 +104,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 
 		if chColumns.ColumnLookup[columnName] {
 			if hasPreviousEvent &&
-				!t.memoizedRegexpsMatch(columnName, t.Config.IgnoredColumnsForDeduplication) &&
+				!t.memoizedRegexpsMatch(t.fieldString(columnName, tableName), t.Config.IgnoredColumnsForDeduplication) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
 				changedColumns = append(changedColumns, columnName)
 				isDuplicate = false

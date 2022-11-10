@@ -112,7 +112,7 @@ Meaning they don't use ADD COLUMN FIRST|BEFORE|AFTER. Only relevant if is not se
 	c.ConcurrentMysqlDumpQueries = fs.Int("concurrent-mysql-dump-selects", 4, "Number of concurrent select queries to run when dumping mysql db")
 
 	DumpTables := fs.String("force-dump-tables", "", "Comma separate list of tables to force dump")
-	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deduplication", "updated-at", "Comma separated list of columns to exclude from deduplication checks")
+	IgnoredColumnsForDeduplication := fs.String("ignored-columns-for-deduplication", ".*updated_at", "Comma separated list of regexp matchers for column names to exclude from deduplication checks.")
 	YamlColumns := fs.String("yaml-columns", "theme_instances.settings,theme_instances.image_sort_order,order_transactions.params", "Comma separated list of columns to parse as yaml")
 	AnonymizeFields := fs.String("anonymize-fields",
 		".*(address|street|secret|postal|line.|password|salt|email|longitude|latitude|given_name|surname|\\.exp_|receipt_).*,payment_methods.properties.*,payment_methods.*description.*",
