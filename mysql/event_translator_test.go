@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"bigcartel/dolosse/clickhouse/cached_columns"
+	"bigcartel/dolosse/consts"
 
 	"github.com/go-mysql-org/go-mysql/mysql"
 	"github.com/go-mysql-org/go-mysql/schema"
@@ -48,11 +49,16 @@ func makeColumnSet() *cached_columns.ChColumnSet {
 				Name: "description",
 				Type: reflect.TypeOf(""),
 			},
+			{
+				Name: consts.EventUpdatedColumnsColumnName,
+				Type: reflect.TypeOf([]string{}),
+			},
 		},
 		ColumnLookup: map[string]bool{
-			"id":          true,
-			"name":        true,
-			"description": true,
+			"id":                                 true,
+			"name":                               true,
+			"description":                        true,
+			consts.EventUpdatedColumnsColumnName: true,
 		},
 	}
 }
@@ -271,6 +277,7 @@ func TestPopulateInsertData(t *testing.T) {
 	assert.Equal(t, 12, rowEvent.InsertData["id"])
 	assert.Equal(t, "asdf", rowEvent.InsertData["name"])
 	assert.Equal(t, "pretty cool", rowEvent.InsertData["description"])
+	assert.Equal(t, []string{"name", "description"}, rowEvent.InsertData[consts.EventUpdatedColumnsColumnName])
 }
 
 func TestPopulateInsertDataWithNoColumnNamesForOldEvents(t *testing.T) {

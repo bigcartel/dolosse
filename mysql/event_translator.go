@@ -88,6 +88,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 	}
 
 	isDuplicate = false
+	changedColumns := make([]string, 0, len(chColumns.Columns))
 	if e.Action == "update" {
 		isDuplicate = true
 	}
@@ -102,16 +103,20 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 		}
 
 		if chColumns.ColumnLookup[columnName] {
-			if isDuplicate &&
-				hasPreviousEvent &&
+			if hasPreviousEvent &&
 				!t.memoizedRegexpsMatch(columnName, t.Config.IgnoredColumnsForDeduplication) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
+				changedColumns = append(changedColumns, columnName)
 				isDuplicate = false
 			}
 
 			convertedValue := t.ParseValue(row[i], e.EventColumnTypes[i], tableName, columnName)
 			data[columnName] = convertedValue
 		}
+	}
+
+	if chColumns.ColumnLookup[consts.EventUpdatedColumnsColumnName] {
+		data[consts.EventUpdatedColumnsColumnName] = changedColumns
 	}
 
 	return
