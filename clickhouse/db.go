@@ -221,6 +221,7 @@ func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 			{consts.EventServerIdColumnName, "LowCardinality(String)", false},
 			{consts.EventTransactionIdColumnName, "UInt64", false},
 			{consts.EventTransactionEventNumberColumnName, "UInt32", false},
+			{consts.EventUpdatedColumnsColumnName, "Array(LowCardinality(String))", false},
 		}
 
 		for _, column := range columns {
