@@ -421,6 +421,7 @@ func NewApp(testing bool, flags []string) App {
 		BatchWrite:  make(chan mysql.MysqlReplicationRowEvent, (*config.BatchSize)*2),
 		EventTranslator: mysql.NewEventTranslator(mysql.EventTranslatorConfig{
 			AnonymizeFields:                config.AnonymizeFields,
+			SkipAnonymizeFields:            config.SkipAnonymizeFields,
 			IgnoredColumnsForDeduplication: config.IgnoredColumnsForDeduplication,
 			YamlColumns:                    config.YamlColumns,
 			AssumeOnlyAppendedColumns:      *config.AssumeOnlyAppendedColumns,
