@@ -102,7 +102,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 			break
 		}
 
-		if chColumns.ColumnLookup[columnName] {
+		if _, ok := chColumns.ColumnLookup[columnName]; ok {
 			if hasPreviousEvent &&
 				!t.memoizedRegexpsMatch(t.fieldString(columnName, tableName), t.Config.IgnoredColumnsForDeduplication) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
@@ -115,7 +115,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 		}
 	}
 
-	if chColumns.ColumnLookup[consts.EventUpdatedColumnsColumnName] {
+	if _, ok := chColumns.ColumnLookup[consts.EventUpdatedColumnsColumnName]; ok {
 		data[consts.EventUpdatedColumnsColumnName] = changedColumns
 	}
 

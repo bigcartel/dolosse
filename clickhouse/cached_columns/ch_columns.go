@@ -6,8 +6,9 @@ import (
 )
 
 type ClickhouseQueryColumn struct {
-	Name string
-	Type reflect.Type
+	Name             string
+	DatabaseTypeName string
+	Type             reflect.Type
 }
 
 type ClickhouseQueryColumns []ClickhouseQueryColumn
@@ -24,7 +25,7 @@ type ChColumnMap map[string][]ChColumnInfo
 
 type ChColumnSet struct {
 	Columns      ClickhouseQueryColumns
-	ColumnLookup map[string]bool
+	ColumnLookup map[string]ClickhouseQueryColumn
 }
 
 type ChColumns struct {
@@ -44,7 +45,7 @@ func (c *ChColumns) ColumnsForTable(table string) (*ChColumnSet, bool) {
 
 type chColumnQueryable interface {
 	ColumnsForMysqlTables(MyColumnQueryable) ChColumnMap
-	Columns(tableName string) (ClickhouseQueryColumns, map[string]bool)
+	Columns(tableName string) (ClickhouseQueryColumns, map[string]ClickhouseQueryColumn)
 }
 
 // this being in here and imported elsewhere feels smelly to me

@@ -37,35 +37,41 @@ func makeRowEvent() *MysqlReplicationRowEvent {
 }
 
 func makeColumnSet() *cached_columns.ChColumnSet {
+	idColumn := cached_columns.ClickhouseQueryColumn{
+		Name: "id",
+		Type: reflect.TypeOf(12),
+	}
+	nameColumn := cached_columns.ClickhouseQueryColumn{
+		Name: "name",
+		Type: reflect.TypeOf(""),
+	}
+	descriptionColumn := cached_columns.ClickhouseQueryColumn{
+		Name: "description",
+		Type: reflect.TypeOf(""),
+	}
+	updatedAtColumn := cached_columns.ClickhouseQueryColumn{
+		Name: "updated_at",
+		Type: reflect.TypeOf(""),
+	}
+	eventUpdatedColumnsColumn := cached_columns.ClickhouseQueryColumn{
+		Name: consts.EventUpdatedColumnsColumnName,
+		Type: reflect.TypeOf([]string{}),
+	}
+
 	return &cached_columns.ChColumnSet{
 		Columns: []cached_columns.ClickhouseQueryColumn{
-			{
-				Name: "id",
-				Type: reflect.TypeOf(12),
-			},
-			{
-				Name: "name",
-				Type: reflect.TypeOf(""),
-			},
-			{
-				Name: "description",
-				Type: reflect.TypeOf(""),
-			},
-			{
-				Name: "updated_at",
-				Type: reflect.TypeOf(""),
-			},
-			{
-				Name: consts.EventUpdatedColumnsColumnName,
-				Type: reflect.TypeOf([]string{}),
-			},
+			idColumn,
+			nameColumn,
+			descriptionColumn,
+			updatedAtColumn,
+			eventUpdatedColumnsColumn,
 		},
-		ColumnLookup: map[string]bool{
-			"id":                                 true,
-			"name":                               true,
-			"description":                        true,
-			"updated_at":                         true,
-			consts.EventUpdatedColumnsColumnName: true,
+		ColumnLookup: map[string]cached_columns.ClickhouseQueryColumn{
+			"id":                                 idColumn,
+			"name":                               nameColumn,
+			"description":                        descriptionColumn,
+			"updated_at":                         updatedAtColumn,
+			consts.EventUpdatedColumnsColumnName: eventUpdatedColumnsColumn,
 		},
 	}
 }
@@ -528,20 +534,25 @@ shipping:
   tracking_number:
 `
 
+	idType := cached_columns.ClickhouseQueryColumn{
+		Name:             "id",
+		DatabaseTypeName: "Int",
+		Type:             reflect.TypeOf(12),
+	}
+	yamlType := cached_columns.ClickhouseQueryColumn{
+		Name:             "yaml_column",
+		DatabaseTypeName: "String",
+		Type:             reflect.TypeOf(""),
+	}
+
 	columns := &cached_columns.ChColumnSet{
 		Columns: []cached_columns.ClickhouseQueryColumn{
-			{
-				Name: "id",
-				Type: reflect.TypeOf(12),
-			},
-			{
-				Name: "yaml_column",
-				Type: reflect.TypeOf(""),
-			},
+			idType,
+			yamlType,
 		},
-		ColumnLookup: map[string]bool{
-			"id":          true,
-			"yaml_column": true,
+		ColumnLookup: map[string]cached_columns.ClickhouseQueryColumn{
+			"id":          idType,
+			"yaml_column": yamlType,
 		},
 	}
 

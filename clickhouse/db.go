@@ -260,13 +260,13 @@ func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
-func (db ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColumns, map[string]bool) {
+func (db ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColumns, map[string]cached_columns.ClickhouseQueryColumn) {
 	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, db.Config.DbName, table)
 	rows, err := db.Conn.Query(db.Ctx, queryString)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "doesn't exist") {
-			return make(cached_columns.ClickhouseQueryColumns, 0), map[string]bool{}
+			return make(cached_columns.ClickhouseQueryColumns, 0), map[string]cached_columns.ClickhouseQueryColumn{}
 		} else {
 			log.Panicln(err, "- query -", queryString)
 		}
@@ -274,18 +274,20 @@ func (db ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColu
 
 	columnTypes := rows.ColumnTypes()
 	var columns = make([]cached_columns.ClickhouseQueryColumn, len(columnTypes))
-	columnNameLookup := make(map[string]bool, len(columnTypes))
+	columnNameLookup := make(map[string]cached_columns.ClickhouseQueryColumn, len(columnTypes))
 
 	for i, columnType := range columnTypes {
 		columnName := columnType.Name()
-		columnReflectScanType := columnType.ScanType()
 
-		columnNameLookup[columnName] = true
-
-		columns[i] = cached_columns.ClickhouseQueryColumn{
-			Name: columnName,
-			Type: columnReflectScanType,
+		queryColumn := cached_columns.ClickhouseQueryColumn{
+			Name:             columnName,
+			DatabaseTypeName: columnType.DatabaseTypeName(),
+			Type:             columnType.ScanType(),
 		}
+
+		columnNameLookup[columnName] = queryColumn
+
+		columns[i] = queryColumn
 	}
 
 	return columns, columnNameLookup
