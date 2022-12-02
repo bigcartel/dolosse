@@ -102,7 +102,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 			break
 		}
 
-		if _, ok := chColumns.ColumnLookup[columnName]; ok {
+		if chColumnType, ok := chColumns.ColumnLookup[columnName]; ok {
 			if hasPreviousEvent &&
 				!t.memoizedRegexpsMatch(t.fieldString(columnName, tableName), t.Config.IgnoredColumnsForDeduplication) &&
 				!reflect.DeepEqual(row[i], previousRow[i]) {
@@ -110,7 +110,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 				isDuplicate = false
 			}
 
-			convertedValue := t.ParseValue(row[i], e.EventColumnTypes[i], tableName, columnName)
+			convertedValue := t.ParseValue(row[i], e.EventColumnTypes[i], tableName, columnName, chColumnType)
 			data[columnName] = convertedValue
 		}
 	}
@@ -122,8 +122,8 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 	return
 }
 
-func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableName string, columnName string) interface{} {
-	value = t.convertMysqlColumnType(value, columnType)
+func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableName string, columnName string, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
+	value = t.convertMysqlColumnType(value, columnType, chColumnType)
 
 	switch v := value.(type) {
 	case []byte:
@@ -168,7 +168,7 @@ func (t EventTranslator) parseString(value string, tableName string, columnName 
 // TODO should this be injected and be a convert function the translator is initiated with?
 const MysqlDateFormat = "2006-01-02"
 
-func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType byte) interface{} {
+func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType byte, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
 	if value == nil {
 		return value
 	}
@@ -197,7 +197,18 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 		if len(vs) > 0 {
 			val, err := decimal.NewFromString(vs)
 			err_utils.Must(err)
-			return val
+			colType := chColumnType.DatabaseTypeName
+			if strings.HasPrefix(colType, "Int") || strings.HasPrefix(colType, "UInt") {
+				// reflect_utils.ReflectAppend takes care of converting to
+				// the nearest compatible clickhouse int column type
+				return val.CoefficientInt64()
+			} else if strings.HasPrefix(colType, "Float") {
+				// reflect_utils.ReflectAppend takes care of converting to
+				// the nearest compatible clickhouse float column type
+				return val.InexactFloat64()
+			} else {
+				return val
+			}
 		} else {
 			return vs
 		}

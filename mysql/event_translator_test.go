@@ -140,7 +140,12 @@ func TestParseBadYaml(t *testing.T) {
 	}
 
 	tr := NewEventTranslator(cfg)
-	err := json.Unmarshal(tr.ParseValue(yaml, mysql.MYSQL_TYPE_VARCHAR, "order_transactions", "params").([]byte), &out)
+
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "params",
+		Type: reflect.TypeOf(""),
+	}
+	err := json.Unmarshal(tr.ParseValue(yaml, mysql.MYSQL_TYPE_VARCHAR, "order_transactions", "params", chCol).([]byte), &out)
 
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +168,11 @@ func TestParseValueUint8Array(t *testing.T) {
 	tr := translator()
 	outValue := "test string"
 	inValue := []uint8(outValue)
-	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_VARCHAR, "table", "column")
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "column",
+		Type: reflect.TypeOf(""),
+	}
+	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_VARCHAR, "table", "column", chCol)
 	if outValue != parsedValue.(string) {
 		t.Fatalf("expected '%s' to be converted to string, got '%s'", inValue, parsedValue)
 	}
@@ -203,7 +212,11 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 		Firstname string `json:"firstname"`
 	}{}
 
-	err = json.Unmarshal(tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column").([]byte), &out)
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "yaml_column",
+		Type: reflect.TypeOf(""),
+	}
+	err = json.Unmarshal(tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column", chCol).([]byte), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,21 +241,57 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 func TestAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password").(string)
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "password",
+		Type: reflect.TypeOf(""),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password", chCol).(string)
 	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+}
+
+func TestConvertDecimalToInt(t *testing.T) {
+	tr := translator()
+	v := "10.21"
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name:             "num",
+		DatabaseTypeName: "Int64",
+		Type:             reflect.TypeOf(uint64(0)),
+	}
+	out := tr.ParseValue(v, mysql.MYSQL_TYPE_DECIMAL, "some_table", "num", chCol).(int64)
+	assert.Equal(t, out, int64(1021), "Expected decimal to be converted to integer")
+}
+
+func TestConvertDecimalToFloat(t *testing.T) {
+	tr := translator()
+	v := "10.21"
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name:             "num",
+		DatabaseTypeName: "Float64",
+		Type:             reflect.TypeOf(float64(0)),
+	}
+	out := tr.ParseValue(v, mysql.MYSQL_TYPE_DECIMAL, "some_table", "num", chCol).(float64)
+	assert.Equal(t, out, 10.21, "Expected decimal to be converted to integer")
 }
 
 func TestSkipAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password_type").(string)
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "password",
+		Type: reflect.TypeOf(""),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password_type", chCol).(string)
 	assert.Equal(t, out, password, "expected password string not to be anonymized")
 }
 
 func TestAnonymizeByteSlice(t *testing.T) {
 	tr := translator()
 	password := []byte("test")
-	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password").(string)
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "password",
+		Type: reflect.TypeOf(""),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password", chCol).(string)
 
 	assert.NotEqual(t, out, string(password), "expected password byte slice to be anonymized")
 }
@@ -264,8 +313,12 @@ func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
 		b.Error(err)
 	}
 
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name: "yaml_column",
+		Type: reflect.TypeOf(""),
+	}
 	for n := 0; n < b.N; n++ {
-		tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column")
+		tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column", chCol)
 	}
 }
 

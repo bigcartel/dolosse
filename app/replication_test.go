@@ -101,13 +101,14 @@ type TestRow = struct {
 	Id              int32           `ch:"id"`
 	Name            string          `ch:"name"`
 	Price           decimal.Decimal `ch:"price"`
+	PriceTwo        uint64          `ch:"price_two"`
 	Description     string          `ch:"description"`
 	ChangelogAction string          `ch:"changelog_action"`
 	Zerp            int32           `ch:"zerp"`
 }
 
 func getTestRows(t *testing.T, chDb clickhouse.ClickhouseDb, expectedRowCount int) []TestRow {
-	return getChRows[TestRow](t, chDb, "select id, name, price, description, changelog_action from test.test order by changelog_event_created_at asc", expectedRowCount)
+	return getChRows[TestRow](t, chDb, "select id, name, price, price_two, description, changelog_action from test.test order by changelog_event_created_at asc", expectedRowCount)
 }
 
 func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two_pks bool) {
@@ -128,22 +129,24 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 				label varchar(100) NOT NULL DEFAULT 'asdf',
 				name varchar(100) NOT NULL DEFAULT '',
 				price decimal(10,2) NOT NULL DEFAULT '0.00',
+				price_two decimal(10,2) NOT NULL DEFAULT '0.00',
 				visits int NOT NULL DEFAULT 0,
 				description text,
 				created_at datetime NOT NULL DEFAULT NOW(),
 				%s
 			);
-			INSERT INTO test (id, name, price, description, created_at)
+			INSERT INTO test (id, name, price, price_two, description, created_at)
 			VALUES (
 				1,
 				"test thing",
 				"12.31",
+				"12.50",
 				"my cool description",
 				NOW()
 			);
 
 			UPDATE test SET visits=1 WHERE id = 1;
-			UPDATE test SET price="12.33" WHERE id = 1;
+			UPDATE test SET price="12.33", price_two="15.33" WHERE id = 1;
 			UPDATE test SET visits=2 WHERE id = 1;
 			`, pks))
 
@@ -155,6 +158,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 				name String,
 				zerp Int32,
 				price Decimal(10, 2),
+				price_two UInt64,
 				description Nullable(String),
 				created_at DateTime,
 				changelog_action LowCardinality(String),
@@ -188,6 +192,7 @@ func TestBasicReplication(t *testing.T) {
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
 		assert.Equal(t, "test thing", r[0].Name, "replicated name should match")
 		assert.Equal(t, err_utils.Unwrap(decimal.NewFromString("12.31")), r[0].Price, "replicated price should match")
+		assert.Equal(t, uint64(1250), r[0].PriceTwo, "replicated price_two should match")
 		assert.Equal(t, "my cool description", r[0].Description, "replicated description should match")
 		assert.Equal(t, err_utils.Unwrap(decimal.NewFromString("12.33")), r[1].Price, "second replicated price should match")
 
@@ -206,11 +211,11 @@ func TestCompositePkReplication(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 
 		r := getTestRows(t, clickhouseConn, 2)
-		log.Infoln(r)
 
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
 		assert.Equal(t, "test thing", r[0].Name, "replicated name should match")
 		assert.Equal(t, err_utils.Unwrap(decimal.NewFromString("12.31")), r[0].Price, "replicated price should match")
+		assert.Equal(t, uint64(1250), r[0].PriceTwo, "replicated price_two should match")
 		assert.Equal(t, "my cool description", r[0].Description, "replicated description should match")
 		assert.Equal(t, err_utils.Unwrap(decimal.NewFromString("12.33")), r[1].Price, "second replicated price should match")
 
@@ -228,38 +233,42 @@ func TestReplicationAndDump(t *testing.T) {
 		// master for some reason
 		execMysqlStatements(mysqlConn, `
 			RESET MASTER;
-			INSERT INTO test (id, name, price, description, created_at)
+			INSERT INTO test (id, name, price, price_two, description, created_at)
 			VALUES (
 				2,
 				"replicated",
 				"1.77",
+				"12.50",
 				"replicated deszzzc",
 				NOW()
 			);
-			INSERT INTO test (id, name, price, description, created_at)
+			INSERT INTO test (id, name, price, price_two, description, created_at)
 			VALUES (
 				3,
 				"replicated",
 				"1.77",
+				"12.50",
 				"replicated desfeeeec",
 				NOW()
 			);
-			INSERT INTO test (id, name, price, description, created_at)
+			INSERT INTO test (id, name, price, price_two, description, created_at)
 			VALUES (
 				4,
 				"replicated",
 				"1.77",
+				"12.50",
 				"replicated asdf",
 				NOW()
 			);
 
 			alter table test add column zerp int;
 
-			INSERT INTO test (id, name, price, description, created_at, zerp)
+			INSERT INTO test (id, name, price, price_two, description, created_at, zerp)
 			VALUES (
 				5,
 				"zerped",
 				"10000.77",
+				"40000.91",
 				"something else",
 				NOW(),
 				444
@@ -311,10 +320,11 @@ func generateBenchMysqlStatements(n int) string {
 	statement := strings.Builder{}
 	statement.Grow(n * 50)
 	for i := 2; i < n; i++ {
-		statement.WriteString("INSERT INTO test (id, name, price, description, created_at) VALUES (")
+		statement.WriteString("INSERT INTO test (id, name, price, price_two, description, created_at) VALUES (")
 		statement.WriteString(strconv.Itoa(i))
 		statement.WriteString(`,"replicated",
 			"1.77",
+			"12.50",
 			"replicated desc",
 			NOW());`)
 	}
