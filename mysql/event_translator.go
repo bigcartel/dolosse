@@ -127,15 +127,15 @@ func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableNam
 
 	switch v := value.(type) {
 	case []byte:
-		return t.parseString(string(v), tableName, columnName)
+		return t.parseString(string(v), tableName, columnName, chColumnType)
 	case string:
-		return t.parseString(v, tableName, columnName)
+		return t.parseString(v, tableName, columnName, chColumnType)
 	default:
 		return value
 	}
 }
 
-func (t EventTranslator) parseString(value string, tableName string, columnName string) interface{} {
+func (t EventTranslator) parseString(value string, tableName string, columnName string, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
 	var out interface{}
 
 	if t.isYamlColumn(tableName, columnName) {
@@ -152,14 +152,14 @@ func (t EventTranslator) parseString(value string, tableName string, columnName 
 
 		for k, v := range y {
 			delete(y, k)
-			v = t.anonymizeValue(v, tableName, t.fieldString(columnName, k))
+			v = t.anonymizeValue(v, tableName, t.fieldString(columnName, k), chColumnType)
 			y[stripLeadingColon(k)] = v
 		}
 
 		out, err = json.Marshal(y)
 		err_utils.Must(err)
 	} else {
-		out = t.anonymizeValue(value, tableName, columnName)
+		out = t.anonymizeValue(value, tableName, columnName, chColumnType)
 	}
 
 	return out
@@ -197,12 +197,11 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 		if len(vs) > 0 {
 			val, err := decimal.NewFromString(vs)
 			err_utils.Must(err)
-			colType := chColumnType.DatabaseTypeName
-			if strings.HasPrefix(colType, "Int") || strings.HasPrefix(colType, "UInt") {
+			if chColumnType.IsInt() {
 				// reflect_utils.ReflectAppend takes care of converting to
 				// the nearest compatible clickhouse int column type
 				return val.CoefficientInt64()
-			} else if strings.HasPrefix(colType, "Float") {
+			} else if chColumnType.IsFloat() {
 				// reflect_utils.ReflectAppend takes care of converting to
 				// the nearest compatible clickhouse float column type
 				return val.InexactFloat64()
@@ -242,8 +241,12 @@ func (t EventTranslator) fieldString(table string, columnPath string) string {
 	return b.String()
 }
 
+func (t EventTranslator) uintHashString(s []byte) uint64 {
+	return city.CH64(s)
+}
+
 func (t EventTranslator) hashString(s []byte) string {
-	return strconv.FormatUint(city.CH64(s), 10)
+	return strconv.FormatUint(t.uintHashString(s), 10)
 }
 
 // sanitize yaml keys that start with colon
@@ -256,30 +259,39 @@ func stripLeadingColon(s string) string {
 }
 
 // currently only supports strings
-func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string) interface{} {
+func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
 	fieldString := t.fieldString(table, columnPath)
 	anonymize := !t.isSkippedAnonymizedField(fieldString) && t.isAnonymizedField(fieldString)
+	destColumnIsUint64 := chColumnType.IsUInt64()
 
 	switch v := value.(type) {
 	case map[string]interface{}:
 		for k, subv := range v {
 			delete(v, k)
-			subv = t.anonymizeValue(subv, table, t.fieldString(columnPath, k))
+			subv = t.anonymizeValue(subv, table, t.fieldString(columnPath, k), chColumnType)
 
 			v[stripLeadingColon(k)] = subv
 		}
 	case []interface{}:
 		for i := range v {
-			v[i] = t.anonymizeValue(v[i], table, t.fieldString(columnPath, fmt.Sprint(i)))
+			v[i] = t.anonymizeValue(v[i], table, t.fieldString(columnPath, fmt.Sprint(i)), chColumnType)
 		}
 	case string:
-		if anonymize {
-			// not safe to use StringToByteSlice here
-			return t.hashString([]byte(v))
+		if anonymize || destColumnIsUint64 {
+			if destColumnIsUint64 {
+				return t.uintHashString([]byte(v))
+			} else {
+				// not safe to use StringToByteSlice here
+				return t.hashString([]byte(v))
+			}
 		}
 	case []byte:
-		if anonymize {
-			return t.hashString(v)
+		if anonymize || destColumnIsUint64 {
+			if destColumnIsUint64 {
+				return t.uintHashString(v)
+			} else {
+				return t.hashString(v)
+			}
 		}
 	}
 

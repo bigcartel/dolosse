@@ -3,12 +3,26 @@ package cached_columns
 import (
 	"bigcartel/dolosse/concurrent_map"
 	"reflect"
+	"strings"
 )
 
 type ClickhouseQueryColumn struct {
 	Name             string
 	DatabaseTypeName string
 	Type             reflect.Type
+}
+
+func (c ClickhouseQueryColumn) IsUInt64() bool {
+	return c.DatabaseTypeName == "UInt64"
+}
+
+func (c ClickhouseQueryColumn) IsInt() bool {
+	return strings.HasPrefix(c.DatabaseTypeName, "Int") ||
+		strings.HasPrefix(c.DatabaseTypeName, "UInt")
+}
+
+func (c ClickhouseQueryColumn) IsFloat() bool {
+	return strings.HasPrefix(c.DatabaseTypeName, "Float")
 }
 
 type ClickhouseQueryColumns []ClickhouseQueryColumn

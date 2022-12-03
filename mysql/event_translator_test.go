@@ -249,6 +249,18 @@ func TestAnonymizeStringValue(t *testing.T) {
 	assert.NotEqual(t, out, password, "expected password string to be anonymized")
 }
 
+func TestAnonymizeStringToUint64(t *testing.T) {
+	tr := translator()
+	password := "test"
+	chCol := cached_columns.ClickhouseQueryColumn{
+		Name:             "password",
+		DatabaseTypeName: "UInt64",
+		Type:             reflect.TypeOf(uint64(0)),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "pswd", chCol).(uint64)
+	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+}
+
 func TestConvertDecimalToInt(t *testing.T) {
 	tr := translator()
 	v := "10.21"
