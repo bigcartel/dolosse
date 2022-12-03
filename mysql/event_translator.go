@@ -195,17 +195,17 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 	case mysql.MYSQL_TYPE_DECIMAL, mysql.MYSQL_TYPE_NEWDECIMAL:
 		vs := fmt.Sprint(value)
 		if len(vs) > 0 {
-			val, err := decimal.NewFromString(vs)
-			err_utils.Must(err)
 			if chColumnType.IsInt() {
 				// reflect_utils.ReflectAppend takes care of converting to
 				// the nearest compatible clickhouse int column type
-				return val.CoefficientInt64()
+				return err_utils.Unwrap(strconv.ParseInt(strings.Replace(vs, ".", "", 1), 10, 64))
 			} else if chColumnType.IsFloat() {
 				// reflect_utils.ReflectAppend takes care of converting to
 				// the nearest compatible clickhouse float column type
-				return val.InexactFloat64()
+				return err_utils.Unwrap(strconv.ParseFloat(vs, 64))
 			} else {
+				val, err := decimal.NewFromString(vs)
+				err_utils.Must(err)
 				return val
 			}
 		} else {
