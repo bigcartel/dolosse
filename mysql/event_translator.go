@@ -245,8 +245,14 @@ func (t EventTranslator) uintHashString(s []byte) uint64 {
 	return city.CH64(s)
 }
 
-func (t EventTranslator) hashString(s []byte) string {
-	return strconv.FormatUint(t.uintHashString(s), 10)
+func (t EventTranslator) hashString(s []byte, destIsUint bool) interface{} {
+	uintHash := t.uintHashString(s)
+
+	if destIsUint {
+		return uintHash
+	} else {
+		return strconv.FormatUint(uintHash, 10)
+	}
 }
 
 // sanitize yaml keys that start with colon
@@ -278,20 +284,12 @@ func (t EventTranslator) anonymizeValue(value interface{}, table string, columnP
 		}
 	case string:
 		if anonymize || destColumnIsUint64 {
-			if destColumnIsUint64 {
-				return t.uintHashString([]byte(v))
-			} else {
-				// not safe to use StringToByteSlice here
-				return t.hashString([]byte(v))
-			}
+			// not safe to use StringToByteSlice here
+			return t.hashString([]byte(v), destColumnIsUint64)
 		}
 	case []byte:
 		if anonymize || destColumnIsUint64 {
-			if destColumnIsUint64 {
-				return t.uintHashString(v)
-			} else {
-				return t.hashString(v)
-			}
+			return t.hashString(v, destColumnIsUint64)
 		}
 	}
 
