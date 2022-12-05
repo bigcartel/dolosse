@@ -245,10 +245,10 @@ func (t EventTranslator) uintHashString(s []byte) uint64 {
 	return city.CH64(s)
 }
 
-func (t EventTranslator) hashString(s []byte, destIsUint bool) interface{} {
+func (t EventTranslator) hashString(s []byte, asUint bool) interface{} {
 	uintHash := t.uintHashString(s)
 
-	if destIsUint {
+	if asUint {
 		return uintHash
 	} else {
 		return strconv.FormatUint(uintHash, 10)
@@ -269,6 +269,8 @@ func (t EventTranslator) anonymizeValue(value interface{}, table string, columnP
 	fieldString := t.fieldString(table, columnPath)
 	anonymize := !t.isSkippedAnonymizedField(fieldString) && t.isAnonymizedField(fieldString)
 	destColumnIsUint64 := chColumnType.IsUInt64()
+	destIsSubfield := strings.Count(fieldString, ".") > 1
+	writeHashAsUInt64 := destColumnIsUint64 || destIsSubfield
 
 	switch v := value.(type) {
 	case map[string]interface{}:
@@ -285,11 +287,11 @@ func (t EventTranslator) anonymizeValue(value interface{}, table string, columnP
 	case string:
 		if anonymize || destColumnIsUint64 {
 			// not safe to use StringToByteSlice here
-			return t.hashString([]byte(v), destColumnIsUint64)
+			return t.hashString([]byte(v), writeHashAsUInt64)
 		}
 	case []byte:
 		if anonymize || destColumnIsUint64 {
-			return t.hashString(v, destColumnIsUint64)
+			return t.hashString(v, writeHashAsUInt64)
 		}
 	}
 

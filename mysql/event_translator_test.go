@@ -207,8 +207,8 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	}
 
 	out := struct {
-		Password  string `json:"password"`
-		Email     string `json:"email"`
+		Password  uint64 `json:"password"`
+		Email     uint64 `json:"email"`
 		Firstname string `json:"firstname"`
 	}{}
 
@@ -225,17 +225,9 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	anonymizedPassword := out.Password
 	parsedFirstName := out.Firstname
 
-	if anonymizedPassword == password {
-		t.Fatalf("Expected password '%s' to be anonymized, got %s", password, anonymizedPassword)
-	}
-
-	if anonymizedEmail == email {
-		t.Fatalf("Expected email '%s' to be anonymized, got %s", email, anonymizedEmail)
-	}
-
-	if parsedFirstName != firstName {
-		t.Fatalf("Expected firstname '%s' not to be anonymized, got %s", firstName, parsedFirstName)
-	}
+	assert.NotEqual(t, anonymizedPassword, password)
+	assert.NotEqual(t, anonymizedEmail, email)
+	assert.Equal(t, parsedFirstName, firstName)
 }
 
 func TestAnonymizeStringValue(t *testing.T) {
