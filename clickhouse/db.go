@@ -162,10 +162,10 @@ func (db ClickhouseDb) Setup() {
 	 ) ENGINE = EmbeddedRocksDB PRIMARY KEY(key)`, db.Config.DbName)))
 }
 
-func (db ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryable) cached_columns.ChColumnMap {
+func (db ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryable) cached_columns.ChTableColumnMap {
 	mysqlTables := my.GetMysqlTableNames()
 	clickhouseTableMap := db.getColumnMap()
-	columnsForTables := make(cached_columns.ChColumnMap, len(mysqlTables))
+	columnsForTables := make(cached_columns.ChTableColumnMap, len(mysqlTables))
 
 	for _, name := range mysqlTables {
 		columns := clickhouseTableMap[name]
@@ -177,20 +177,20 @@ func (db ClickhouseDb) ColumnsForMysqlTables(my cached_columns.MyColumnQueryable
 	return columnsForTables
 }
 
-func (db ClickhouseDb) getColumnMap() cached_columns.ChColumnMap {
+func (db ClickhouseDb) getColumnMap() cached_columns.ChTableColumnMap {
 	rows := err_utils.Unwrap(db.Conn.Query(db.Ctx,
 		fmt.Sprintf(`SELECT table, name, type FROM system.columns where database='%s'`, db.Config.DbName)))
 
-	columns := make(cached_columns.ChColumnMap, 0)
+	columns := make(cached_columns.ChTableColumnMap, 0)
 
 	for rows.Next() {
-		columnInfo := cached_columns.ChColumnInfo{}
+		columnInfo := cached_columns.ChTableColumn{}
 		err_utils.Must(rows.ScanStruct(&columnInfo))
 
 		tableName := columnInfo.Table
 
 		if columns[tableName] == nil {
-			columns[tableName] = make([]cached_columns.ChColumnInfo, 0)
+			columns[tableName] = make([]cached_columns.ChTableColumn, 0)
 		}
 
 		columns[tableName] = append(columns[tableName], columnInfo)
@@ -246,7 +246,8 @@ func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 			baseError := fmt.Sprintf("Clickhouse destination table %s requires columns",
 				table)
 
-			invalidTableMessages = append(invalidTableMessages, fmt.Sprintf("%s %s", baseError, strings.Join(columnStrings, ", ")))
+			invalidTableMessages = append(invalidTableMessages,
+				fmt.Sprintf("%s %s", baseError, strings.Join(columnStrings, ", ")))
 		}
 	}
 
@@ -260,26 +261,26 @@ func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
-func (db ClickhouseDb) Columns(table string) (cached_columns.ClickhouseQueryColumns, map[string]cached_columns.ClickhouseQueryColumn) {
+func (db ClickhouseDb) ColumnsForInsert(table string) (cached_columns.ChInsertColumns, cached_columns.ChInsertColumnMap) {
 	queryString := fmt.Sprintf(`select * from %s.%s limit 0`, db.Config.DbName, table)
 	rows, err := db.Conn.Query(db.Ctx, queryString)
 
 	if err != nil {
 		if strings.Contains(err.Error(), "doesn't exist") {
-			return make(cached_columns.ClickhouseQueryColumns, 0), map[string]cached_columns.ClickhouseQueryColumn{}
+			return make(cached_columns.ChInsertColumns, 0), cached_columns.ChInsertColumnMap{}
 		} else {
 			log.Panicln(err, "- query -", queryString)
 		}
 	}
 
 	columnTypes := rows.ColumnTypes()
-	var columns = make([]cached_columns.ClickhouseQueryColumn, len(columnTypes))
-	columnNameLookup := make(map[string]cached_columns.ClickhouseQueryColumn, len(columnTypes))
+	var columns = make([]cached_columns.ChInsertColumn, len(columnTypes))
+	columnNameLookup := make(cached_columns.ChInsertColumnMap, len(columnTypes))
 
 	for i, columnType := range columnTypes {
 		columnName := columnType.Name()
 
-		queryColumn := cached_columns.ClickhouseQueryColumn{
+		queryColumn := cached_columns.ChInsertColumn{
 			Name:             columnName,
 			DatabaseTypeName: columnType.DatabaseTypeName(),
 			Type:             columnType.ScanType(),

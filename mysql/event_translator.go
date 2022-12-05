@@ -43,7 +43,7 @@ func NewEventTranslator(config EventTranslatorConfig) EventTranslator {
 
 // TODO test with all types we care about - yaml conversion, etc.
 // dedupe for yaml columns according to filtered values?
-func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChColumnSet) (isDuplicate bool, isColumnMismatch bool) {
+func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns *cached_columns.ChTableColumnSet) (isDuplicate bool, isColumnMismatch bool) {
 	insertData, isDuplicate, isColumnMismatch := t.InsertDataFromRows(e, columns)
 
 	if isDuplicate {
@@ -63,7 +63,7 @@ func (t EventTranslator) PopulateInsertData(e *MysqlReplicationRowEvent, columns
 	return
 }
 
-func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColumns *cached_columns.ChColumnSet) (data RowInsertData, isDuplicate bool, isColumnMismatch bool) {
+func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColumns *cached_columns.ChTableColumnSet) (data RowInsertData, isDuplicate bool, isColumnMismatch bool) {
 	data = make(RowInsertData, len(chColumns.Columns))
 
 	var previousRow []interface{}
@@ -122,7 +122,7 @@ func (t EventTranslator) InsertDataFromRows(e *MysqlReplicationRowEvent, chColum
 	return
 }
 
-func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableName string, columnName string, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
+func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableName string, columnName string, chColumnType cached_columns.ChInsertColumn) interface{} {
 	value = t.convertMysqlColumnType(value, columnType, chColumnType)
 
 	switch v := value.(type) {
@@ -135,7 +135,7 @@ func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableNam
 	}
 }
 
-func (t EventTranslator) parseString(value string, tableName string, columnName string, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
+func (t EventTranslator) parseString(value string, tableName string, columnName string, chColumnType cached_columns.ChInsertColumn) interface{} {
 	var out interface{}
 
 	if t.isYamlColumn(tableName, columnName) {
@@ -168,7 +168,7 @@ func (t EventTranslator) parseString(value string, tableName string, columnName 
 // TODO should this be injected and be a convert function the translator is initiated with?
 const MysqlDateFormat = "2006-01-02"
 
-func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType byte, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
+func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType byte, chColumnType cached_columns.ChInsertColumn) interface{} {
 	if value == nil {
 		return value
 	}
@@ -265,7 +265,7 @@ func stripLeadingColon(s string) string {
 }
 
 // currently only supports strings
-func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string, chColumnType cached_columns.ClickhouseQueryColumn) interface{} {
+func (t EventTranslator) anonymizeValue(value interface{}, table string, columnPath string, chColumnType cached_columns.ChInsertColumn) interface{} {
 	fieldString := t.fieldString(table, columnPath)
 	anonymize := !t.isSkippedAnonymizedField(fieldString) && t.isAnonymizedField(fieldString)
 	destColumnIsUint64 := chColumnType.IsUInt64()

@@ -27,7 +27,7 @@ type Mysql struct {
 	cfg           Config
 	mysqlColumns  concurrent_map.ConcurrentMap[*schema.Table]
 	dumpingTables concurrent_map.ConcurrentMap[struct{}]
-	ChColumns     *cached_columns.ChColumns
+	ChColumns     *cached_columns.ChDatabaseColumns
 }
 
 type Config struct {
@@ -39,7 +39,7 @@ type Config struct {
 	ConcurrentDumpQueries int
 }
 
-func InitMysql(ctx context.Context, cachedColumns *cached_columns.ChColumns, cfg Config) Mysql {
+func InitMysql(ctx context.Context, cachedColumns *cached_columns.ChDatabaseColumns, cfg Config) Mysql {
 	return Mysql{
 		Ctx:           ctx,
 		Pool:          client.NewPool(log.Debugf, 10, 20, 5, cfg.Address, cfg.User, cfg.Password, cfg.DbName),

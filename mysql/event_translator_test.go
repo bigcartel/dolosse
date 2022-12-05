@@ -36,37 +36,37 @@ func makeRowEvent() *MysqlReplicationRowEvent {
 	return replicationRowEvent
 }
 
-func makeColumnSet() *cached_columns.ChColumnSet {
-	idColumn := cached_columns.ClickhouseQueryColumn{
+func makeColumnSet() *cached_columns.ChTableColumnSet {
+	idColumn := cached_columns.ChInsertColumn{
 		Name: "id",
 		Type: reflect.TypeOf(12),
 	}
-	nameColumn := cached_columns.ClickhouseQueryColumn{
+	nameColumn := cached_columns.ChInsertColumn{
 		Name: "name",
 		Type: reflect.TypeOf(""),
 	}
-	descriptionColumn := cached_columns.ClickhouseQueryColumn{
+	descriptionColumn := cached_columns.ChInsertColumn{
 		Name: "description",
 		Type: reflect.TypeOf(""),
 	}
-	updatedAtColumn := cached_columns.ClickhouseQueryColumn{
+	updatedAtColumn := cached_columns.ChInsertColumn{
 		Name: "updated_at",
 		Type: reflect.TypeOf(""),
 	}
-	eventUpdatedColumnsColumn := cached_columns.ClickhouseQueryColumn{
+	eventUpdatedColumnsColumn := cached_columns.ChInsertColumn{
 		Name: consts.EventUpdatedColumnsColumnName,
 		Type: reflect.TypeOf([]string{}),
 	}
 
-	return &cached_columns.ChColumnSet{
-		Columns: []cached_columns.ClickhouseQueryColumn{
+	return &cached_columns.ChTableColumnSet{
+		Columns: []cached_columns.ChInsertColumn{
 			idColumn,
 			nameColumn,
 			descriptionColumn,
 			updatedAtColumn,
 			eventUpdatedColumnsColumn,
 		},
-		ColumnLookup: map[string]cached_columns.ClickhouseQueryColumn{
+		ColumnLookup: map[string]cached_columns.ChInsertColumn{
 			"id":                                 idColumn,
 			"name":                               nameColumn,
 			"description":                        descriptionColumn,
@@ -141,7 +141,7 @@ func TestParseBadYaml(t *testing.T) {
 
 	tr := NewEventTranslator(cfg)
 
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "params",
 		Type: reflect.TypeOf(""),
 	}
@@ -168,7 +168,7 @@ func TestParseValueUint8Array(t *testing.T) {
 	tr := translator()
 	outValue := "test string"
 	inValue := []uint8(outValue)
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "column",
 		Type: reflect.TypeOf(""),
 	}
@@ -212,7 +212,7 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 		Firstname string `json:"firstname"`
 	}{}
 
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "yaml_column",
 		Type: reflect.TypeOf(""),
 	}
@@ -233,7 +233,7 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 func TestAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "password",
 		Type: reflect.TypeOf(""),
 	}
@@ -244,7 +244,7 @@ func TestAnonymizeStringValue(t *testing.T) {
 func TestAnonymizeStringToUint64(t *testing.T) {
 	tr := translator()
 	password := "test"
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name:             "password",
 		DatabaseTypeName: "UInt64",
 		Type:             reflect.TypeOf(uint64(0)),
@@ -256,7 +256,7 @@ func TestAnonymizeStringToUint64(t *testing.T) {
 func TestConvertDecimalToInt(t *testing.T) {
 	tr := translator()
 	v := "10.21"
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name:             "num",
 		DatabaseTypeName: "Int64",
 		Type:             reflect.TypeOf(uint64(0)),
@@ -268,7 +268,7 @@ func TestConvertDecimalToInt(t *testing.T) {
 func TestConvertDecimalToFloat(t *testing.T) {
 	tr := translator()
 	v := "10.21"
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name:             "num",
 		DatabaseTypeName: "Float64",
 		Type:             reflect.TypeOf(float64(0)),
@@ -280,7 +280,7 @@ func TestConvertDecimalToFloat(t *testing.T) {
 func TestSkipAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "password",
 		Type: reflect.TypeOf(""),
 	}
@@ -291,7 +291,7 @@ func TestSkipAnonymizeStringValue(t *testing.T) {
 func TestAnonymizeByteSlice(t *testing.T) {
 	tr := translator()
 	password := []byte("test")
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "password",
 		Type: reflect.TypeOf(""),
 	}
@@ -317,7 +317,7 @@ func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
 		b.Error(err)
 	}
 
-	chCol := cached_columns.ClickhouseQueryColumn{
+	chCol := cached_columns.ChInsertColumn{
 		Name: "yaml_column",
 		Type: reflect.TypeOf(""),
 	}
@@ -591,23 +591,23 @@ shipping:
   tracking_number:
 `
 
-	idType := cached_columns.ClickhouseQueryColumn{
+	idType := cached_columns.ChInsertColumn{
 		Name:             "id",
 		DatabaseTypeName: "Int",
 		Type:             reflect.TypeOf(12),
 	}
-	yamlType := cached_columns.ClickhouseQueryColumn{
+	yamlType := cached_columns.ChInsertColumn{
 		Name:             "yaml_column",
 		DatabaseTypeName: "String",
 		Type:             reflect.TypeOf(""),
 	}
 
-	columns := &cached_columns.ChColumnSet{
-		Columns: []cached_columns.ClickhouseQueryColumn{
+	columns := &cached_columns.ChTableColumnSet{
+		Columns: []cached_columns.ChInsertColumn{
 			idType,
 			yamlType,
 		},
-		ColumnLookup: map[string]cached_columns.ClickhouseQueryColumn{
+		ColumnLookup: map[string]cached_columns.ChInsertColumn{
 			"id":          idType,
 			"yaml_column": yamlType,
 		},

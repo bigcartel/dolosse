@@ -36,7 +36,7 @@ type App struct {
 	EventTranslator mysql.EventTranslator
 	Stats           *Stats
 	Config          config.Config
-	ChColumns       *cached_columns.ChColumns
+	ChColumns       *cached_columns.ChDatabaseColumns
 }
 
 func (app App) processEventWorker() {
@@ -115,7 +115,7 @@ func (app App) deliverBatchForTable(clickhouseDb clickhouse.ClickhouseDb, table 
 	log.Infof("batch sent for %s.%s", *app.Config.MysqlDb, table)
 }
 
-func (app App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, table string, processedRows []mysql.MysqlReplicationRowEvent, chColumns []cached_columns.ClickhouseQueryColumn) (ClickhouseBatchColumns, int) {
+func (app App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, table string, processedRows []mysql.MysqlReplicationRowEvent, chColumns []cached_columns.ChInsertColumn) (ClickhouseBatchColumns, int) {
 	minMaxValues := mysql.GetMinMaxValues(processedRows)
 
 	tableWithDb := app.tableWithDb(table)
@@ -173,7 +173,7 @@ func (app App) buildClickhouseBatchRows(clickhouseDb clickhouse.ClickhouseDb, ta
 	return batchColumnArrays, writeCount
 }
 
-func commaSeparatedColumnNames(columns []cached_columns.ClickhouseQueryColumn) string {
+func commaSeparatedColumnNames(columns []cached_columns.ChInsertColumn) string {
 	columnNames := ""
 	count := 0
 	columnCount := len(columns)
@@ -188,7 +188,7 @@ func commaSeparatedColumnNames(columns []cached_columns.ClickhouseQueryColumn) s
 	return columnNames
 }
 
-func (app App) sendClickhouseBatch(clickhouseDb clickhouse.ClickhouseDb, table string, batchColumnArrays ClickhouseBatchColumns, chColumns []cached_columns.ClickhouseQueryColumn) {
+func (app App) sendClickhouseBatch(clickhouseDb clickhouse.ClickhouseDb, table string, batchColumnArrays ClickhouseBatchColumns, chColumns []cached_columns.ChInsertColumn) {
 	tableWithDb := app.tableWithDb(table)
 
 	batch := err_utils.Unwrap(clickhouseDb.Conn.PrepareBatch(context.Background(),
@@ -398,7 +398,7 @@ func NewApp(testing bool, flags []string) App {
 		os.Exit(1)
 	}
 
-	chColumns := cached_columns.NewChColumns()
+	chColumns := cached_columns.NewChDatabaseColumns()
 
 	my := mysql.InitMysql(ctx, chColumns, mysql.Config{
 		Address:               *config.MysqlAddr,
