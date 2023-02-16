@@ -45,6 +45,7 @@ func (app App) processEventWorker() {
 		case <-app.Ctx.Done():
 			return
 		case event := <-app.ProcessRows:
+			// TODO: pre-emptively auto-create table if it matches matcher and isn't already created here
 			columns, hasColumns := app.ChColumns.ColumnsForTable(event.Table.Name)
 
 			if !hasColumns {

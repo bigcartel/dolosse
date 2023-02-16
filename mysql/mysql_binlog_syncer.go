@@ -36,9 +36,9 @@ func (my Mysql) StartReplication(gtidSet mysql.GTIDSet, OnRow RowHandler) error 
 	cfg := replication.BinlogSyncerConfig{
 		ServerID:         uint32(rand.New(rand.NewSource(time.Now().Unix())).Intn(1000)) + 1001,
 		HeartbeatPeriod:  60 * time.Second,
-		Host:             my.cfg.Address,
-		User:             my.cfg.User,
-		Password:         my.cfg.Password,
+		Host:             my.Config.Address,
+		User:             my.Config.User,
+		Password:         my.Config.Password,
 		Flavor:           "mysql",
 		DisableRetrySync: true,
 		RawModeEnabled:   true,

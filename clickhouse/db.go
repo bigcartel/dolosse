@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"bigcartel/dolosse/clickhouse/cached_columns"
@@ -199,10 +200,49 @@ func (db ClickhouseDb) getColumnMap() cached_columns.ChTableColumnMap {
 	return columns
 }
 
+// TODO: could also add a field that is a go template for adding this
+// column to a given table as an alter table statement
 type RequiredColumn = struct {
 	Name    string
 	Type    string
 	IsValid bool
+}
+
+func formatString(format string, args ...string) string {
+	r := strings.NewReplacer(args...)
+	return r.Replace(format)
+}
+
+// TODO: figure out way to make this really fast if the table is already created, or just skip
+func (db ClickhouseDb) AutoCreateMysqlTable(mysqlDbName, mysqlTableName string, matcher *regexp.Regexp, myCfg mysql.Config) {
+	if !matcher.MatchString(mysqlTableName) {
+		return
+	}
+
+	// TODO: configurable auto-added pks in hierarchical order
+	// if mysql table includes columns - eg: account_id, product_id, product_option_id
+	// or just always make it event created at unless you specify some override based on a match?
+	// or base it on first encountered index if present?
+	// I guess I maybe gravitate towards simpler, always ordering by binlog columns.
+	err_utils.Must(db.Conn.Exec(db.Ctx,
+		formatString(`
+			CREATE TABLE {clickhouseSchema}.{mysqlTableName} AS
+				SELECT
+					*,
+			FROM mysql(
+				'{mysqlAddress}',
+				'{mysqlDb}',
+				'{mysqlTable}',
+				'{mysqlUser}',
+				'{mysqlPassword}'
+			)`,
+			"{clickhouseSchema}", db.Config.DbName,
+			"{mysqlAddress}", myCfg.Address,
+			"{mysqlDb}", mysqlDbName,
+			"{mysqlTable}", mysqlTableName,
+			"{mysqlUser}", myCfg.User,
+			"{mysqlPassword}", myCfg.Password,
+		)))
 }
 
 func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
@@ -215,6 +255,7 @@ func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 			continue
 		}
 
+		// TODO: make a const and use this to create tables automatically as well
 		requiredColumns := []RequiredColumn{
 			{consts.EventCreatedAtColumnName, "DateTime64(9)", false},
 			{consts.EventActionColumnName, "LowCardinality(String)", false},

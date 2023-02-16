@@ -24,7 +24,7 @@ type Mysql struct {
 	Pool          *client.Pool
 	InitiatedDump *atomic.Bool
 	dbNameByte    []byte
-	cfg           Config
+	Config        Config
 	mysqlColumns  concurrent_map.ConcurrentMap[*schema.Table]
 	dumpingTables concurrent_map.ConcurrentMap[struct{}]
 	ChColumns     *cached_columns.ChDatabaseColumns
@@ -45,7 +45,7 @@ func InitMysql(ctx context.Context, cachedColumns *cached_columns.ChDatabaseColu
 		Pool:          client.NewPool(log.Debugf, 10, 20, 5, cfg.Address, cfg.User, cfg.Password, cfg.DbName),
 		InitiatedDump: &atomic.Bool{},
 		dbNameByte:    []byte(cfg.DbName),
-		cfg:           cfg,
+		Config:        cfg,
 		dumpingTables: concurrent_map.NewConcurrentMap[struct{}](),
 		mysqlColumns:  concurrent_map.NewConcurrentMap[*schema.Table](),
 		ChColumns:     cachedColumns,
@@ -74,7 +74,7 @@ func (db Mysql) GetMysqlVariable(conn *client.Conn, variable string) string {
 
 func (db Mysql) GetMysqlTableNames() []string {
 	return withMysqlConnection(db, func(conn *client.Conn) []string {
-		rr, err := conn.Execute(fmt.Sprintf("SHOW TABLES FROM %s", db.cfg.DbName))
+		rr, err := conn.Execute(fmt.Sprintf("SHOW TABLES FROM %s", db.Config.DbName))
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -121,10 +121,10 @@ type tableDumpedStatusManager interface {
 
 func (db Mysql) DumpMysqlDb(dtm tableDumpedStatusManager, forceDump bool, onRow RowHandler) {
 	var wg sync.WaitGroup
-	working := make(chan bool, db.cfg.ConcurrentDumpQueries)
+	working := make(chan bool, db.Config.ConcurrentDumpQueries)
 	db.ChColumns.M.Range(func(k, _ any) bool {
 		table := k.(string)
-		if db.dumpingTables.Get(table) == nil && db.cfg.DumpTables[table] || forceDump || !dtm.GetTableDumped(table) {
+		if db.dumpingTables.Get(table) == nil && db.Config.DumpTables[table] || forceDump || !dtm.GetTableDumped(table) {
 			log.Infof("Begin dump of %s", table)
 			db.dumpingTables.Set(table, &struct{}{})
 			dtm.SetTableDumped(table, false) // reset if force dump
@@ -133,7 +133,7 @@ func (db Mysql) DumpMysqlDb(dtm tableDumpedStatusManager, forceDump bool, onRow 
 
 			go func(t string) {
 				working <- true
-				err_utils.Must(db.dumpTable(db.cfg.DbName, t, onRow))
+				err_utils.Must(db.dumpTable(db.Config.DbName, t, onRow))
 				dtm.SetTableDumped(table, true)
 				<-working
 				wg.Done()

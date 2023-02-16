@@ -97,6 +97,7 @@ Flags:
 Meaning they don't use ADD COLUMN FIRST|BEFORE|AFTER. Only relevant if is not set to BINLOG_ROW_METADATA=FULL`)
 	c.RunProfile = fs.Bool("profile", false, "Outputs pprof profile to cpu.pprof for performance analysis")
 	c.StartFromGtid = fs.String("start-from-gtid", "", "Start from gtid set")
+	// TODO: make this a regexp so you can match against multiple mysql dbs
 	c.MysqlDb = fs.String("mysql-db", "bigcartel", "mysql db to dump")
 	c.MysqlAddr = fs.String("mysql-addr", "10.100.0.104:3306", "ip/url and port for mysql db")
 	c.MysqlUser = fs.String("mysql-user", "metabase", "mysql user")
