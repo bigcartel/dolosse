@@ -230,6 +230,33 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	assert.Equal(t, parsedFirstName, firstName)
 }
 
+func TestParseRubyHashYaml(t *testing.T) {
+	tr := translator()
+
+	yamlString := []byte(`--- !ruby/hash:ActiveSupport::HashWithIndifferentAccess
+:firstname: "Mr"
+:last: "Person"
+`)
+
+	out := struct {
+		Firstname string `json:"firstname"`
+		Last      string `json:"last"`
+	}{}
+
+	chCol := cached_columns.ChInsertColumn{
+		Name: "yaml_column",
+		Type: reflect.TypeOf(""),
+	}
+
+	err := json.Unmarshal(tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column", chCol).([]byte), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assert.Equal(t, "Mr", out.Firstname)
+	assert.Equal(t, "Person", out.Last)
+}
+
 func TestAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"

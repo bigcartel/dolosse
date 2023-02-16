@@ -135,10 +135,17 @@ func (t EventTranslator) ParseValue(value interface{}, columnType byte, tableNam
 	}
 }
 
+var rubyHashYamlHeader = "--- !ruby/hash:ActiveSupport::HashWithIndifferentAccess"
+
+func sanitizeRubyHashYaml(value string) string {
+	return strings.Replace(value, rubyHashYamlHeader, "", 1)
+}
+
 func (t EventTranslator) parseString(value string, tableName string, columnName string, chColumnType cached_columns.ChInsertColumn) interface{} {
 	var out interface{}
 
 	if t.isYamlColumn(tableName, columnName) {
+		value = sanitizeRubyHashYaml(value)
 		y := make(map[string]interface{})
 
 		err := yaml.Unmarshal(zeroalloc.StringToByteSlice(value), &y)
