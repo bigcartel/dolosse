@@ -395,6 +395,7 @@ func NewApp(testing bool, flags []string) App {
 	config, err := config.NewFromFlags(flags)
 
 	if err != nil {
+		log.Errorln(err)
 		os.Exit(1)
 	}
 

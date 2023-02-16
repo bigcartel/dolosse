@@ -123,6 +123,8 @@ Meaning they don't use ADD COLUMN FIRST|BEFORE|AFTER. Only relevant if is not se
 		"Comma separated list of field name regexps to explicitly not anonymize. Uses golang regexp syntax. The pattern for the field name being matched against is '{tableName}.{fieldName}.{jsonFieldName}*'. ")
 	err := ff.Parse(fs, args,
 		ff.WithEnvVarPrefix("DOLOSSE"),
+		ff.WithConfigFileFlag("config"),
+		ff.WithConfigFileParser(ff.JSONParser),
 	)
 
 	c.DumpTables = make(map[string]bool)
