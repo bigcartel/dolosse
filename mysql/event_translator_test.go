@@ -36,36 +36,42 @@ func makeRowEvent() *MysqlReplicationRowEvent {
 	return replicationRowEvent
 }
 
-func makeColumnSet() *cached_columns.ChColumnSet {
-	return &cached_columns.ChColumnSet{
-		Columns: []cached_columns.ClickhouseQueryColumn{
-			{
-				Name: "id",
-				Type: reflect.TypeOf(12),
-			},
-			{
-				Name: "name",
-				Type: reflect.TypeOf(""),
-			},
-			{
-				Name: "description",
-				Type: reflect.TypeOf(""),
-			},
-			{
-				Name: "updated_at",
-				Type: reflect.TypeOf(""),
-			},
-			{
-				Name: consts.EventUpdatedColumnsColumnName,
-				Type: reflect.TypeOf([]string{}),
-			},
+func makeColumnSet() *cached_columns.ChTableColumnSet {
+	idColumn := cached_columns.ChInsertColumn{
+		Name: "id",
+		Type: reflect.TypeOf(12),
+	}
+	nameColumn := cached_columns.ChInsertColumn{
+		Name: "name",
+		Type: reflect.TypeOf(""),
+	}
+	descriptionColumn := cached_columns.ChInsertColumn{
+		Name: "description",
+		Type: reflect.TypeOf(""),
+	}
+	updatedAtColumn := cached_columns.ChInsertColumn{
+		Name: "updated_at",
+		Type: reflect.TypeOf(""),
+	}
+	eventUpdatedColumnsColumn := cached_columns.ChInsertColumn{
+		Name: consts.EventUpdatedColumnsColumnName,
+		Type: reflect.TypeOf([]string{}),
+	}
+
+	return &cached_columns.ChTableColumnSet{
+		Columns: []cached_columns.ChInsertColumn{
+			idColumn,
+			nameColumn,
+			descriptionColumn,
+			updatedAtColumn,
+			eventUpdatedColumnsColumn,
 		},
-		ColumnLookup: map[string]bool{
-			"id":                                 true,
-			"name":                               true,
-			"description":                        true,
-			"updated_at":                         true,
-			consts.EventUpdatedColumnsColumnName: true,
+		ColumnLookup: map[string]cached_columns.ChInsertColumn{
+			"id":                                 idColumn,
+			"name":                               nameColumn,
+			"description":                        descriptionColumn,
+			"updated_at":                         updatedAtColumn,
+			consts.EventUpdatedColumnsColumnName: eventUpdatedColumnsColumn,
 		},
 	}
 }
@@ -134,7 +140,12 @@ func TestParseBadYaml(t *testing.T) {
 	}
 
 	tr := NewEventTranslator(cfg)
-	err := json.Unmarshal(tr.ParseValue(yaml, mysql.MYSQL_TYPE_VARCHAR, "order_transactions", "params").([]byte), &out)
+
+	chCol := cached_columns.ChInsertColumn{
+		Name: "params",
+		Type: reflect.TypeOf(""),
+	}
+	err := json.Unmarshal(tr.ParseValue(yaml, mysql.MYSQL_TYPE_VARCHAR, "order_transactions", "params", chCol).([]byte), &out)
 
 	if err != nil {
 		t.Fatal(err)
@@ -157,7 +168,11 @@ func TestParseValueUint8Array(t *testing.T) {
 	tr := translator()
 	outValue := "test string"
 	inValue := []uint8(outValue)
-	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_VARCHAR, "table", "column")
+	chCol := cached_columns.ChInsertColumn{
+		Name: "column",
+		Type: reflect.TypeOf(""),
+	}
+	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_VARCHAR, "table", "column", chCol)
 	if outValue != parsedValue.(string) {
 		t.Fatalf("expected '%s' to be converted to string, got '%s'", inValue, parsedValue)
 	}
@@ -192,12 +207,16 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	}
 
 	out := struct {
-		Password  string `json:"password"`
-		Email     string `json:"email"`
+		Password  uint64 `json:"password"`
+		Email     uint64 `json:"email"`
 		Firstname string `json:"firstname"`
 	}{}
 
-	err = json.Unmarshal(tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column").([]byte), &out)
+	chCol := cached_columns.ChInsertColumn{
+		Name: "yaml_column",
+		Type: reflect.TypeOf(""),
+	}
+	err = json.Unmarshal(tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column", chCol).([]byte), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,37 +225,77 @@ func TestParseConvertAndAnonymizeYaml(t *testing.T) {
 	anonymizedPassword := out.Password
 	parsedFirstName := out.Firstname
 
-	if anonymizedPassword == password {
-		t.Fatalf("Expected password '%s' to be anonymized, got %s", password, anonymizedPassword)
-	}
-
-	if anonymizedEmail == email {
-		t.Fatalf("Expected email '%s' to be anonymized, got %s", email, anonymizedEmail)
-	}
-
-	if parsedFirstName != firstName {
-		t.Fatalf("Expected firstname '%s' not to be anonymized, got %s", firstName, parsedFirstName)
-	}
+	assert.NotEqual(t, anonymizedPassword, password)
+	assert.NotEqual(t, anonymizedEmail, email)
+	assert.Equal(t, parsedFirstName, firstName)
 }
 
 func TestAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password").(string)
+	chCol := cached_columns.ChInsertColumn{
+		Name: "password",
+		Type: reflect.TypeOf(""),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password", chCol).(string)
 	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+}
+
+func TestAnonymizeStringToUint64(t *testing.T) {
+	tr := translator()
+	password := "test"
+	chCol := cached_columns.ChInsertColumn{
+		Name:             "password",
+		DatabaseTypeName: "UInt64",
+		Type:             reflect.TypeOf(uint64(0)),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "pswd", chCol).(uint64)
+	assert.NotEqual(t, out, password, "expected password string to be anonymized")
+}
+
+func TestConvertDecimalToInt(t *testing.T) {
+	tr := translator()
+	v := "10.21"
+	chCol := cached_columns.ChInsertColumn{
+		Name:             "num",
+		DatabaseTypeName: "Int64",
+		Type:             reflect.TypeOf(uint64(0)),
+	}
+	out := tr.ParseValue(v, mysql.MYSQL_TYPE_DECIMAL, "some_table", "num", chCol).(int64)
+	assert.Equal(t, out, int64(1021), "Expected decimal to be converted to integer")
+}
+
+func TestConvertDecimalToFloat(t *testing.T) {
+	tr := translator()
+	v := "10.21"
+	chCol := cached_columns.ChInsertColumn{
+		Name:             "num",
+		DatabaseTypeName: "Float64",
+		Type:             reflect.TypeOf(float64(0)),
+	}
+	out := tr.ParseValue(v, mysql.MYSQL_TYPE_DECIMAL, "some_table", "num", chCol).(float64)
+	assert.Equal(t, out, 10.21, "Expected decimal to be converted to integer")
 }
 
 func TestSkipAnonymizeStringValue(t *testing.T) {
 	tr := translator()
 	password := "test"
-	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password_type").(string)
+	chCol := cached_columns.ChInsertColumn{
+		Name: "password",
+		Type: reflect.TypeOf(""),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password_type", chCol).(string)
 	assert.Equal(t, out, password, "expected password string not to be anonymized")
 }
 
 func TestAnonymizeByteSlice(t *testing.T) {
 	tr := translator()
 	password := []byte("test")
-	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password").(string)
+	chCol := cached_columns.ChInsertColumn{
+		Name: "password",
+		Type: reflect.TypeOf(""),
+	}
+	out := tr.ParseValue(password, mysql.MYSQL_TYPE_VARCHAR, "some_table", "password", chCol).(string)
 
 	assert.NotEqual(t, out, string(password), "expected password byte slice to be anonymized")
 }
@@ -258,8 +317,12 @@ func BenchmarkParseConvertAndAnonymizeYaml(b *testing.B) {
 		b.Error(err)
 	}
 
+	chCol := cached_columns.ChInsertColumn{
+		Name: "yaml_column",
+		Type: reflect.TypeOf(""),
+	}
 	for n := 0; n < b.N; n++ {
-		tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column")
+		tr.ParseValue(string(yamlString), mysql.MYSQL_TYPE_VARCHAR, "test_table", "yaml_column", chCol)
 	}
 }
 
@@ -528,20 +591,25 @@ shipping:
   tracking_number:
 `
 
-	columns := &cached_columns.ChColumnSet{
-		Columns: []cached_columns.ClickhouseQueryColumn{
-			{
-				Name: "id",
-				Type: reflect.TypeOf(12),
-			},
-			{
-				Name: "yaml_column",
-				Type: reflect.TypeOf(""),
-			},
+	idType := cached_columns.ChInsertColumn{
+		Name:             "id",
+		DatabaseTypeName: "Int",
+		Type:             reflect.TypeOf(12),
+	}
+	yamlType := cached_columns.ChInsertColumn{
+		Name:             "yaml_column",
+		DatabaseTypeName: "String",
+		Type:             reflect.TypeOf(""),
+	}
+
+	columns := &cached_columns.ChTableColumnSet{
+		Columns: []cached_columns.ChInsertColumn{
+			idType,
+			yamlType,
 		},
-		ColumnLookup: map[string]bool{
-			"id":          true,
-			"yaml_column": true,
+		ColumnLookup: map[string]cached_columns.ChInsertColumn{
+			"id":          idType,
+			"yaml_column": yamlType,
 		},
 	}
 

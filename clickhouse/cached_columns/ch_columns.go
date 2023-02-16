@@ -3,48 +3,64 @@ package cached_columns
 import (
 	"bigcartel/dolosse/concurrent_map"
 	"reflect"
+	"strings"
 )
 
-type ClickhouseQueryColumn struct {
-	Name string
-	Type reflect.Type
+type ChInsertColumn struct {
+	Name             string
+	DatabaseTypeName string
+	Type             reflect.Type
 }
 
-type ClickhouseQueryColumns []ClickhouseQueryColumn
+func (c ChInsertColumn) IsUInt64() bool {
+	return c.DatabaseTypeName == "UInt64"
+}
+
+func (c ChInsertColumn) IsInt() bool {
+	return strings.HasPrefix(c.DatabaseTypeName, "Int") ||
+		strings.HasPrefix(c.DatabaseTypeName, "UInt")
+}
+
+func (c ChInsertColumn) IsFloat() bool {
+	return strings.HasPrefix(c.DatabaseTypeName, "Float")
+}
+
+type ChInsertColumns []ChInsertColumn
+type ChInsertColumnMap = map[string]ChInsertColumn
 
 // unfortunately we can't get reflect types when querying all tables at once
 // so this is a separate type from ClickhouseQueryColumn
-type ChColumnInfo struct {
+type ChTableColumn struct {
 	Name  string `ch:"name"`
 	Table string `ch:"table"`
 	Type  string `ch:"type"`
 }
 
-type ChColumnMap map[string][]ChColumnInfo
+type ChTableColumnMap map[string][]ChTableColumn
 
-type ChColumnSet struct {
-	Columns      ClickhouseQueryColumns
-	ColumnLookup map[string]bool
+type ChTableColumnSet struct {
+	Columns      ChInsertColumns
+	ColumnLookup ChInsertColumnMap
 }
 
-type ChColumns struct {
-	M concurrent_map.ConcurrentMap[ChColumnSet]
+type ChDatabaseColumns struct {
+	M concurrent_map.ConcurrentMap[ChTableColumnSet]
 }
 
-func NewChColumns() *ChColumns {
-	return &ChColumns{
-		M: concurrent_map.NewConcurrentMap[ChColumnSet](),
+func NewChDatabaseColumns() *ChDatabaseColumns {
+	return &ChDatabaseColumns{
+		M: concurrent_map.NewConcurrentMap[ChTableColumnSet](),
 	}
 }
 
-func (c *ChColumns) ColumnsForTable(table string) (*ChColumnSet, bool) {
+func (c *ChDatabaseColumns) ColumnsForTable(table string) (*ChTableColumnSet, bool) {
 	columns := c.M.Get(table)
 	return columns, (columns != nil && len(columns.Columns) > 0)
 }
 
-type chColumnQueryable interface {
-	ColumnsForMysqlTables(MyColumnQueryable) ChColumnMap
-	Columns(tableName string) (ClickhouseQueryColumns, map[string]bool)
+type ChColumnQueryable interface {
+	ColumnsForMysqlTables(MyColumnQueryable) ChTableColumnMap
+	ColumnsForInsert(tableName string) (ChInsertColumns, ChInsertColumnMap)
 }
 
 // this being in here and imported elsewhere feels smelly to me
@@ -53,13 +69,13 @@ type MyColumnQueryable interface {
 }
 
 // TODO make this a cache method
-func (c *ChColumns) Sync(ch chColumnQueryable, my MyColumnQueryable) {
+func (c *ChDatabaseColumns) Sync(ch ChColumnQueryable, my MyColumnQueryable) {
 	existingClickhouseTables := ch.ColumnsForMysqlTables(my)
 
 	for table := range existingClickhouseTables {
-		cols, lookup := ch.Columns(table)
+		cols, lookup := ch.ColumnsForInsert(table)
 
-		c.M.Set(table, &ChColumnSet{
+		c.M.Set(table, &ChTableColumnSet{
 			Columns:      cols,
 			ColumnLookup: lookup,
 		})
