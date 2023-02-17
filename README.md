@@ -7,6 +7,7 @@ When creating your schema, it's important to consider making sure the deduplicat
 If you're not ordering your table by the event's gtid fields you'll want to add a projection that orders by them
 so that the deduplication queries run quickly
 
+```
 ALTER TABLE mysql_bigcartel_binlog.products
     ADD PROJECTION prj_changelog_event_gtid
     (
@@ -19,6 +20,8 @@ ALTER TABLE mysql_bigcartel_binlog.products
 ```
 
 If you're not ordering your table by id you might want to add a projection that orders by id so dump deduplication queries run fast:
+
+```
 ALTER TABLE mysql_bigcartel_binlog.products
     ADD PROJECTION prj_id
     (
