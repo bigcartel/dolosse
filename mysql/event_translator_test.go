@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"bigcartel/dolosse/clickhouse/cached_columns"
 	"bigcartel/dolosse/consts"
@@ -175,6 +176,44 @@ func TestParseValueUint8Array(t *testing.T) {
 	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_VARCHAR, "table", "column", chCol)
 	if outValue != parsedValue.(string) {
 		t.Fatalf("expected '%s' to be converted to string, got '%s'", inValue, parsedValue)
+	}
+}
+
+func TestTruncateDateTimeOverflow(t *testing.T) {
+	tr := translator()
+
+	outValue := time.Date(2299, 1, 2, 15, 4, 5, 0, time.UTC)
+	inValue := time.Date(2400, 1, 2, 15, 4, 5, 0, time.UTC).Format("2006-01-02 15:04:05")
+
+	chCol := cached_columns.ChInsertColumn{
+		Name:             "column",
+		DatabaseTypeName: "DateTime64",
+		Type:             reflect.TypeOf(""),
+	}
+
+	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_DATETIME, "table", "column", chCol)
+
+	if outValue != parsedValue.(time.Time) {
+		t.Fatalf("expected '%s' to be converted to time.Time and truncated to %s, got '%s'", inValue, outValue, parsedValue)
+	}
+}
+
+func TestParseDateTime(t *testing.T) {
+	tr := translator()
+
+	outValue := time.Date(2023, 1, 2, 15, 4, 5, 0, time.UTC)
+	inValue := outValue.Format("2006-01-02 15:04:05")
+
+	chCol := cached_columns.ChInsertColumn{
+		Name:             "column",
+		DatabaseTypeName: "DateTime64",
+		Type:             reflect.TypeOf(""),
+	}
+
+	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_DATETIME, "table", "column", chCol)
+
+	if outValue != parsedValue.(time.Time) {
+		t.Fatalf("expected '%s' to be converted to time.Time and truncated to %s, got '%s'", inValue, outValue, parsedValue)
 	}
 }
 

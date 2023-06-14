@@ -175,6 +175,32 @@ func (t EventTranslator) parseString(value string, tableName string, columnName 
 // TODO should this be injected and be a convert function the translator is initiated with?
 const MysqlDateFormat = "2006-01-02"
 
+func updateYear(d time.Time, newYear int) time.Time {
+	if d.Year() > newYear {
+		return time.Date(newYear, d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), d.Location())
+	} else {
+		return d
+	}
+}
+
+func truncateTimeOverflow(d time.Time, chColumnType string) time.Time {
+	switch chColumnType {
+	// Supports range of values: [1970-01-01 00:00:00, 2106-02-07 06:28:15]
+	case "DateTime":
+		return updateYear(d, 2105)
+	// Supports range of values: [1970-01-01, 2149-06-06]
+	case "Date":
+		return updateYear(d, 2148)
+	// Supported range of values: [1900-01-01 00:00:00, 2299-12-31 23:59:59.99999999]
+	case "DateTime64", "Date32":
+		return updateYear(d, 2299)
+	default:
+		return d
+	}
+}
+
+// Translates mysql types to types that are safe to insert
+// into clickhouse for a given mysql + clickhouse column pair
 func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType byte, chColumnType cached_columns.ChInsertColumn) interface{} {
 	if value == nil {
 		return value
@@ -186,7 +212,8 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 		if len(vs) > 0 {
 			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
 			err_utils.Must(err)
-			return vt
+
+			return truncateTimeOverflow(vt, chColumnType.DatabaseTypeName)
 		} else {
 			return value
 		}
@@ -195,7 +222,8 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 		if len(vs) > 0 {
 			vt, err := time.Parse(MysqlDateFormat, vs)
 			err_utils.Must(err)
-			return vt
+
+			return truncateTimeOverflow(vt, chColumnType.DatabaseTypeName)
 		} else {
 			return value
 		}
