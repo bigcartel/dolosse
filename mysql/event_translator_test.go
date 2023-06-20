@@ -182,13 +182,14 @@ func TestParseValueUint8Array(t *testing.T) {
 func TestTruncateDateTimeOverflow(t *testing.T) {
 	tr := translator()
 
-	outValue := time.Date(2282, 1, 2, 15, 4, 5, 0, time.UTC)
+	outValue := time.Date(2261, 1, 2, 15, 4, 5, 0, time.UTC)
 	inValue := time.Date(2400, 1, 2, 15, 4, 5, 0, time.UTC).Format("2006-01-02 15:04:05")
 
 	chCol := cached_columns.ChInsertColumn{
-		Name:             "column",
-		DatabaseTypeName: "DateTime64",
-		Type:             reflect.TypeOf(""),
+		Name:                 "column",
+		DatabaseTypeName:     "DateTime64(3)",
+		DatabaseTypeBaseName: "DateTime64",
+		Type:                 reflect.TypeOf(""),
 	}
 
 	parsedValue := tr.ParseValue(inValue, mysql.MYSQL_TYPE_DATETIME, "table", "column", chCol)

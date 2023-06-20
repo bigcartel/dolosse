@@ -259,6 +259,14 @@ func (db ClickhouseDb) CheckSchema(my cached_columns.MyColumnQueryable) {
 	}
 }
 
+func columnTypeBaseName(s string) string {
+	if idx := strings.Index(s, "("); idx != -1 {
+		return s[:idx]
+	} else {
+		return s
+	}
+}
+
 // Used to get reflect types for each column value that can then be used for
 // safe value casting
 func (db ClickhouseDb) ColumnsForInsert(table string) (cached_columns.ChInsertColumns, cached_columns.ChInsertColumnMap) {
@@ -280,10 +288,12 @@ func (db ClickhouseDb) ColumnsForInsert(table string) (cached_columns.ChInsertCo
 	for i, columnType := range columnTypes {
 		columnName := columnType.Name()
 
+		columnTypeName := columnType.DatabaseTypeName()
 		queryColumn := cached_columns.ChInsertColumn{
-			Name:             columnName,
-			DatabaseTypeName: columnType.DatabaseTypeName(),
-			Type:             columnType.ScanType(),
+			Name:                 columnName,
+			DatabaseTypeName:     columnTypeName,
+			DatabaseTypeBaseName: columnTypeBaseName(columnTypeName),
+			Type:                 columnType.ScanType(),
 		}
 
 		columnNameLookup[columnName] = queryColumn

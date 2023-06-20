@@ -183,14 +183,14 @@ func updateYear(d time.Time, newYear int) time.Time {
 	}
 }
 
-func truncateTimeOverflow(d time.Time, chColumnType string) time.Time {
-	switch chColumnType {
+func truncateTimeOverflow(d time.Time, chColumnBaseType string) time.Time {
+	switch chColumnBaseType {
 	// Supports range of values: [1970-01-01 00:00:00, 2106-11-11 23:59:59]
 	case "DateTime", "DateTime32", "Date":
 		return updateYear(d, 2105)
-	// Supported range of values: [1900-01-01 00:00:00, 2283-11-11 23:59:59]
+	// Supported range of values at highest precision: [1900-01-01 00:00:00, 2262-04-11 23:47:16]
 	case "DateTime64", "Date32":
-		return updateYear(d, 2282)
+		return updateYear(d, 2261)
 	default:
 		return d
 	}
@@ -210,7 +210,7 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 			vt, err := time.ParseInLocation(mysql.TimeFormat, vs, time.UTC)
 			err_utils.Must(err)
 
-			return truncateTimeOverflow(vt, chColumnType.DatabaseTypeName)
+			return truncateTimeOverflow(vt, chColumnType.DatabaseTypeBaseName)
 		} else {
 			return value
 		}
@@ -220,7 +220,7 @@ func (t EventTranslator) convertMysqlColumnType(value interface{}, columnType by
 			vt, err := time.Parse(MysqlDateFormat, vs)
 			err_utils.Must(err)
 
-			return truncateTimeOverflow(vt, chColumnType.DatabaseTypeName)
+			return truncateTimeOverflow(vt, chColumnType.DatabaseTypeBaseName)
 		} else {
 			return value
 		}

@@ -7,9 +7,10 @@ import (
 )
 
 type ChInsertColumn struct {
-	Name             string
-	DatabaseTypeName string
-	Type             reflect.Type
+	Name                 string
+	DatabaseTypeName     string
+	DatabaseTypeBaseName string
+	Type                 reflect.Type
 }
 
 func (c ChInsertColumn) IsUInt64() bool {

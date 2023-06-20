@@ -175,7 +175,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 				price_two UInt64,
 				description Nullable(String),
 				created_at DateTime,
-				ts_two Date,
+				ts_two DateTime64(3),
 				changelog_action LowCardinality(String),
 				changelog_event_created_at DateTime64(9),
 				changelog_gtid_server_id LowCardinality(String),
@@ -233,7 +233,8 @@ func TestCompositePkReplication(t *testing.T) {
 		assert.Equal(t, uint64(1250), r[0].PriceTwo, "replicated price_two should match")
 		assert.Equal(t, "my cool description", r[0].Description, "replicated description should match")
 		assert.Equal(t, err_utils.Unwrap(decimal.NewFromString("12.33")), r[1].Price, "second replicated price should match")
-		assert.Equal(t, 2105, r[2].TsTwo.Year(), "third replicated overflow year should be truncated")
+		fmt.Println(r[2].TsTwo)
+		assert.Equal(t, 2261, r[2].TsTwo.Year(), "third replicated overflow year should be truncated")
 		assert.Equal(t, 2001, r[3].TsTwo.Year(), "fourth replicated year should not be truncated")
 
 		app.Shutdown()
