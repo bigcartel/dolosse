@@ -103,12 +103,23 @@ type TestRow = struct {
 	Price           decimal.Decimal `ch:"price"`
 	PriceTwo        uint64          `ch:"price_two"`
 	Description     string          `ch:"description"`
+	TsTwo           time.Time       `ch:"ts_two"`
 	ChangelogAction string          `ch:"changelog_action"`
 	Zerp            int32           `ch:"zerp"`
 }
 
 func getTestRows(t *testing.T, chDb clickhouse.ClickhouseDb, expectedRowCount int) []TestRow {
-	return getChRows[TestRow](t, chDb, "select id, name, price, price_two, description, changelog_action from test.test order by changelog_event_created_at asc", expectedRowCount)
+	return getChRows[TestRow](t, chDb, `
+		select id,
+			name,
+			price,
+			price_two,
+			description,
+			ts_two,
+			changelog_action
+			from test.test
+			order by changelog_event_created_at asc
+	  `, expectedRowCount)
 }
 
 func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two_pks bool) {
@@ -133,6 +144,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 				visits int NOT NULL DEFAULT 0,
 				description text,
 				created_at datetime NOT NULL DEFAULT NOW(),
+				ts_two datetime NOT NULL DEFAULT NOW(),
 				%s
 			);
 			INSERT INTO test (id, name, price, price_two, description, created_at)
@@ -148,6 +160,8 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 			UPDATE test SET visits=1 WHERE id = 1;
 			UPDATE test SET price="12.33", price_two="15.33" WHERE id = 1;
 			UPDATE test SET visits=2 WHERE id = 1;
+			UPDATE test SET ts_two='2500-04-04' WHERE id = 1;
+			UPDATE test SET ts_two='2001-01-22' WHERE id = 1;
 			`, pks))
 
 	execChStatements(clickhouseConn,
@@ -161,6 +175,7 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 				price_two UInt64,
 				description Nullable(String),
 				created_at DateTime,
+				ts_two Date,
 				changelog_action LowCardinality(String),
 				changelog_event_created_at DateTime64(9),
 				changelog_gtid_server_id LowCardinality(String),
@@ -186,7 +201,7 @@ func TestBasicReplication(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getTestRows(t, clickhouseConn, 2)
+		r := getTestRows(t, clickhouseConn, 4)
 		log.Infoln(r)
 
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
@@ -210,7 +225,7 @@ func TestCompositePkReplication(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getTestRows(t, clickhouseConn, 2)
+		r := getTestRows(t, clickhouseConn, 4)
 
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
 		assert.Equal(t, "test thing", r[0].Name, "replicated name should match")
@@ -218,6 +233,8 @@ func TestCompositePkReplication(t *testing.T) {
 		assert.Equal(t, uint64(1250), r[0].PriceTwo, "replicated price_two should match")
 		assert.Equal(t, "my cool description", r[0].Description, "replicated description should match")
 		assert.Equal(t, err_utils.Unwrap(decimal.NewFromString("12.33")), r[1].Price, "second replicated price should match")
+		assert.Equal(t, 2105, r[2].TsTwo.Year(), "third replicated overflow year should be truncated")
+		assert.Equal(t, 2001, r[3].TsTwo.Year(), "fourth replicated year should not be truncated")
 
 		app.Shutdown()
 		time.Sleep(100 * time.Millisecond)

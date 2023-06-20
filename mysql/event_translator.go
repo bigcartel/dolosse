@@ -185,15 +185,12 @@ func updateYear(d time.Time, newYear int) time.Time {
 
 func truncateTimeOverflow(d time.Time, chColumnType string) time.Time {
 	switch chColumnType {
-	// Supports range of values: [1970-01-01 00:00:00, 2106-02-07 06:28:15]
-	case "DateTime":
+	// Supports range of values: [1970-01-01 00:00:00, 2106-11-11 23:59:59]
+	case "DateTime", "DateTime32", "Date":
 		return updateYear(d, 2105)
-	// Supports range of values: [1970-01-01, 2149-06-06]
-	case "Date":
-		return updateYear(d, 2148)
-	// Supported range of values: [1900-01-01 00:00:00, 2299-12-31 23:59:59.99999999]
+	// Supported range of values: [1900-01-01 00:00:00, 2283-11-11 23:59:59]
 	case "DateTime64", "Date32":
-		return updateYear(d, 2299)
+		return updateYear(d, 2282)
 	default:
 		return d
 	}
