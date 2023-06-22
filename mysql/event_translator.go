@@ -261,7 +261,11 @@ func (t EventTranslator) isYamlColumn(tableName string, columnName string) bool 
 }
 
 func (t EventTranslator) memoizedRegexpsMatch(s string, r []*regexp.Regexp) bool {
-	return t.CachedMatchers.MemoizedRegexpsMatch(s, r)
+	if len(r) == 0 {
+		return false
+	} else {
+		return t.CachedMatchers.MemoizedRegexpsMatch(s, r)
+	}
 }
 
 func (t EventTranslator) fieldString(table string, columnPath string) string {

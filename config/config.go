@@ -43,6 +43,10 @@ type Config struct {
 }
 
 func csvToRegexps(csv string) []*regexp.Regexp {
+	if csv == "" {
+		return make([]*regexp.Regexp, 0)
+	}
+
 	s := strings.Split(csv, ",")
 	var fields = make([]*regexp.Regexp, len(s))
 	for i := range fields {
