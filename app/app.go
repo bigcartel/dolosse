@@ -21,6 +21,7 @@ import (
 )
 
 type ClickhouseBatchColumns = []interface{}
+
 type ClickhouseBatchColumnsByTable = map[string]ClickhouseBatchColumns
 type ClickhouseBatchRow struct {
 	InsertColumns ClickhouseBatchColumns

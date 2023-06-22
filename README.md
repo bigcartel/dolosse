@@ -1,4 +1,22 @@
-TODO fill this out
+  ____   ___  _     ___  ____ ____  _____
+ |  _ \ / _ \| |   / _ \/ ___/ ___|| ____|
+ | | | | | | | |  | | | \___ \___ \|  _|
+ | |_| | |_| | |__| |_| |___) |__) | |___
+ |____/ \___/|_____\___/|____/____/|_____|
+
+Simple and efficient mysql binlog to clickhouse replication.
+
+Dolosse supports:
+- Parsing columns containing YAML and converting them to JSON
+- Stably hashing fields of sensitive user data to anonymize it (even nested within YAML columns) while still providing a means for querying that data.
+- Only replicating the mysql columns that are also present in the destination clickhouse table and deduplicating row data. Any events which would result in a duplicate given the subset of columns in the destination table will be ignored.
+- Pulling the maximum amount of binlog data available, and dumping only data not already present in the binlog.
+- Deduplicating binlog data such that you can rewind the syncer or re-run a database dump at any time without fear of writing duplicate data.
+
+You'll need to set binlog_format = 'ROW' for Dolosse to work.
+To have the most seamless handling of changes in schema over time it's recommended to also set binlog_row_metadata = 'FULL'.
+Dolosse will run fine with binlog_row_metadata = 'MINIMAL' but will fall back to assuming newly added columns are appended
+to the table, or skipping historical events on schema mismatch with --asume-only-append-columns=false.
 
 This tool assumes that all tables being replicated have a primary key, but if they don't it will still work, it just won't deduplicate dump events.
 
