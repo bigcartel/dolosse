@@ -397,6 +397,10 @@ func NewApp(testing bool, flags []string) App {
 
 	if err != nil {
 		log.Errorln(err)
+		if err.Error() == "error parsing commandline arguments: flag: help requested" {
+			os.Exit(0)
+		}
+		log.Errorln(err)
 		os.Exit(1)
 	}
 
