@@ -175,9 +175,11 @@ func (t EventTranslator) parseString(value string, tableName string, columnName 
 // TODO should this be injected and be a convert function the translator is initiated with?
 const MysqlDateFormat = "2006-01-02"
 
-func updateYear(d time.Time, newYear int) time.Time {
-	if d.Year() > newYear {
-		return time.Date(newYear, d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), d.Location())
+func updateYear(d time.Time, maxYear int, minYear int) time.Time {
+	if d.Year() > maxYear {
+		return time.Date(maxYear, d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), d.Location())
+	} else if d.Year() < minYear {
+		return time.Date(minYear, d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), d.Location())
 	} else {
 		return d
 	}
@@ -187,10 +189,10 @@ func truncateTimeOverflow(d time.Time, chColumnBaseType string) time.Time {
 	switch chColumnBaseType {
 	// Supports range of values: [1970-01-01 00:00:00, 2106-11-11 23:59:59]
 	case "DateTime", "DateTime32", "Date":
-		return updateYear(d, 2105)
-	// Supported range of values at highest precision: [1900-01-01 00:00:00, 2262-04-11 23:47:16]
+		return updateYear(d, 2105, 1970)
+	// Supported range of values at highest precision: 1925-01-01 00:00:00 and 2283-11-11 00:00:00
 	case "DateTime64", "Date32":
-		return updateYear(d, 2261)
+		return updateYear(d, 2261, 1925)
 	default:
 		return d
 	}

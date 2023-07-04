@@ -160,8 +160,9 @@ func InitDbs(mysqlConn *client.Conn, clickhouseConn clickhouse.ClickhouseDb, two
 			UPDATE test SET visits=1 WHERE id = 1;
 			UPDATE test SET price="12.33", price_two="15.33" WHERE id = 1;
 			UPDATE test SET visits=2 WHERE id = 1;
-			UPDATE test SET ts_two='2500-04-04' WHERE id = 1;
+			UPDATE test SET ts_two='2300-04-04' WHERE id = 1;
 			UPDATE test SET ts_two='2001-01-22' WHERE id = 1;
+			UPDATE test SET ts_two='0001-01-22' WHERE id = 1;
 			`, pks))
 
 	execChStatements(clickhouseConn,
@@ -201,7 +202,7 @@ func TestBasicReplication(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getTestRows(t, clickhouseConn, 4)
+		r := getTestRows(t, clickhouseConn, 5)
 		log.Infoln(r)
 
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
@@ -225,7 +226,7 @@ func TestCompositePkReplication(t *testing.T) {
 
 		time.Sleep(100 * time.Millisecond)
 
-		r := getTestRows(t, clickhouseConn, 4)
+		r := getTestRows(t, clickhouseConn, 5)
 
 		assert.Equal(t, int32(1), r[0].Id, "replicated id should match")
 		assert.Equal(t, "test thing", r[0].Name, "replicated name should match")
@@ -236,6 +237,7 @@ func TestCompositePkReplication(t *testing.T) {
 		fmt.Println(r[2].TsTwo)
 		assert.Equal(t, 2261, r[2].TsTwo.Year(), "third replicated overflow year should be truncated")
 		assert.Equal(t, 2001, r[3].TsTwo.Year(), "fourth replicated year should not be truncated")
+		assert.Equal(t, 1925, r[4].TsTwo.Year(), "fifth replicated year should be truncated")
 
 		app.Shutdown()
 		time.Sleep(100 * time.Millisecond)
