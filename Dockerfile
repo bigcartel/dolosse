@@ -1,4 +1,4 @@
-FROM golang:1.19-alpine as build
+FROM golang:1.20-alpine as build
 
 # Set necessary environment variables needed for our image
 ENV GO111MODULE=on \
